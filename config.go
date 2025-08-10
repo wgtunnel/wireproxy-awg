@@ -1,16 +1,19 @@
 package wireproxy
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"strings"
 
-	"github.com/go-ini/ini"
-
 	"net/netip"
+
+	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/go-ini/ini"
 )
 
 type PeerConfig struct {
@@ -53,6 +56,14 @@ type DeviceConfig struct {
 	CheckAlive         []netip.Addr
 	CheckAliveInterval int
 	ASecConfig         *ASecConfigType
+}
+
+// DeviceSetting contains the parameters for setting up a tun interface
+type DeviceSetting struct {
+	IpcRequest string
+	DNS        []netip.Addr
+	DeviceAddr []netip.Addr
+	MTU        int
 }
 
 type TCPClientTunnelConfig struct {
@@ -179,6 +190,27 @@ func parseNetIP(section *ini.Section, keyName string) ([]netip.Addr, error) {
 		ips = append(ips, ip)
 	}
 	return ips, nil
+}
+
+func parseStringList(section *ini.Section, keyName string) ([]string, error) {
+	key, err := parseString(section, keyName)
+	if err != nil {
+		if strings.Contains(err.Error(), "should not be empty") {
+			return []string{}, nil
+		}
+		return nil, err
+	}
+
+	keys := strings.Split(key, ",")
+	var strs = make([]string, 0, len(keys))
+	for _, str := range keys {
+		str = strings.TrimSpace(str)
+		if len(str) == 0 {
+			continue
+		}
+		strs = append(strs, str)
+	}
+	return strs, nil
 }
 
 func parseCIDRNetIP(section *ini.Section, keyName string) ([]netip.Addr, error) {
@@ -603,52 +635,6 @@ func ParsePeers(cfg *ini.File, peers *[]PeerConfig) error {
 	return nil
 }
 
-func parseTCPClientTunnelConfig(section *ini.Section) (RoutineSpawner, error) {
-	config := &TCPClientTunnelConfig{}
-	tcpAddr, err := parseTCPAddr(section, "BindAddress")
-	if err != nil {
-		return nil, err
-	}
-	config.BindAddress = tcpAddr
-
-	targetSection, err := parseString(section, "Target")
-	if err != nil {
-		return nil, err
-	}
-	config.Target = targetSection
-
-	return config, nil
-}
-
-func parseSTDIOTunnelConfig(section *ini.Section) (RoutineSpawner, error) {
-	config := &STDIOTunnelConfig{}
-	targetSection, err := parseString(section, "Target")
-	if err != nil {
-		return nil, err
-	}
-	config.Target = targetSection
-
-	return config, nil
-}
-
-func parseTCPServerTunnelConfig(section *ini.Section) (RoutineSpawner, error) {
-	config := &TCPServerTunnelConfig{}
-
-	listenPort, err := parsePort(section, "ListenPort")
-	if err != nil {
-		return nil, err
-	}
-	config.ListenPort = listenPort
-
-	target, err := parseString(section, "Target")
-	if err != nil {
-		return nil, err
-	}
-	config.Target = target
-
-	return config, nil
-}
-
 func parseSocks5Config(section *ini.Section) (RoutineSpawner, error) {
 	config := &Socks5Config{}
 
@@ -718,6 +704,33 @@ func ParseConfig(path string) (*Configuration, error) {
 		return nil, err
 	}
 
+	return Parse(cfg)
+}
+
+// ParseConfigString takes the config as a string and parses it into Configuration
+func ParseConfigString(config string) (*Configuration, error) {
+	iniOpt := ini.LoadOptions{
+		Insensitive:            true,
+		AllowShadows:           true,
+		AllowNonUniqueSections: true,
+	}
+
+	cfg, err := ini.LoadSources(iniOpt, []byte(config))
+	if err != nil {
+		return nil, err
+	}
+
+	return Parse(cfg)
+
+}
+
+func Parse(cfg *ini.File) (*Configuration, error) {
+	iniOpt := ini.LoadOptions{
+		Insensitive:            true,
+		AllowShadows:           true,
+		AllowNonUniqueSections: true,
+	}
+
 	device := &DeviceConfig{
 		MTU: 1420,
 	}
@@ -744,21 +757,6 @@ func ParseConfig(path string) (*Configuration, error) {
 
 	var routinesSpawners []RoutineSpawner
 
-	err = parseRoutinesConfig(&routinesSpawners, cfg, "TCPClientTunnel", parseTCPClientTunnelConfig)
-	if err != nil {
-		return nil, err
-	}
-
-	err = parseRoutinesConfig(&routinesSpawners, cfg, "STDIOTunnel", parseSTDIOTunnelConfig)
-	if err != nil {
-		return nil, err
-	}
-
-	err = parseRoutinesConfig(&routinesSpawners, cfg, "TCPServerTunnel", parseTCPServerTunnelConfig)
-	if err != nil {
-		return nil, err
-	}
-
 	err = parseRoutinesConfig(&routinesSpawners, cfg, "Socks5", parseSocks5Config)
 	if err != nil {
 		return nil, err
@@ -773,4 +771,88 @@ func ParseConfig(path string) (*Configuration, error) {
 		Device:   device,
 		Routines: routinesSpawners,
 	}, nil
+}
+
+// CreateIPCRequest serialize the config into an IPC request and DeviceSetting
+func CreateIPCRequest(conf *DeviceConfig) (*DeviceSetting, error) {
+	var request bytes.Buffer
+
+	request.WriteString(fmt.Sprintf("private_key=%s\n", conf.SecretKey))
+
+	if conf.ListenPort != nil {
+		request.WriteString(fmt.Sprintf("listen_port=%d\n", *conf.ListenPort))
+	}
+
+	if conf.ASecConfig != nil {
+		aSecConfig := conf.ASecConfig
+
+		var aSecBuilder strings.Builder
+
+		aSecBuilder.WriteString(fmt.Sprintf("jc=%d\n", aSecConfig.junkPacketCount))
+		aSecBuilder.WriteString(fmt.Sprintf("jmin=%d\n", aSecConfig.junkPacketMinSize))
+		aSecBuilder.WriteString(fmt.Sprintf("jmax=%d\n", aSecConfig.junkPacketMaxSize))
+		aSecBuilder.WriteString(fmt.Sprintf("s1=%d\n", aSecConfig.initPacketJunkSize))
+		aSecBuilder.WriteString(fmt.Sprintf("s2=%d\n", aSecConfig.responsePacketJunkSize))
+		aSecBuilder.WriteString(fmt.Sprintf("h1=%d\n", aSecConfig.initPacketMagicHeader))
+		aSecBuilder.WriteString(fmt.Sprintf("h2=%d\n", aSecConfig.responsePacketMagicHeader))
+		aSecBuilder.WriteString(fmt.Sprintf("h3=%d\n", aSecConfig.underloadPacketMagicHeader))
+		aSecBuilder.WriteString(fmt.Sprintf("h4=%d\n", aSecConfig.transportPacketMagicHeader))
+
+		if aSecConfig.i1 != nil {
+			aSecBuilder.WriteString(fmt.Sprintf("i1=%s\n", *aSecConfig.i1))
+		}
+		if aSecConfig.i2 != nil {
+			aSecBuilder.WriteString(fmt.Sprintf("i2=%s\n", *aSecConfig.i2))
+		}
+		if aSecConfig.i3 != nil {
+			aSecBuilder.WriteString(fmt.Sprintf("i3=%s\n", *aSecConfig.i3))
+		}
+		if aSecConfig.i4 != nil {
+			aSecBuilder.WriteString(fmt.Sprintf("i4=%s\n", *aSecConfig.i4))
+		}
+		if aSecConfig.i5 != nil {
+			aSecBuilder.WriteString(fmt.Sprintf("i5=%s\n", *aSecConfig.i5))
+		}
+		if aSecConfig.j1 != nil {
+			aSecBuilder.WriteString(fmt.Sprintf("j1=%s\n", *aSecConfig.j1))
+		}
+		if aSecConfig.j2 != nil {
+			aSecBuilder.WriteString(fmt.Sprintf("j2=%s\n", *aSecConfig.j2))
+		}
+		if aSecConfig.j3 != nil {
+			aSecBuilder.WriteString(fmt.Sprintf("j3=%s\n", *aSecConfig.j3))
+		}
+		if aSecConfig.itime != nil {
+			aSecBuilder.WriteString(fmt.Sprintf("itime=%d\n", *aSecConfig.itime))
+		}
+
+		request.WriteString(aSecBuilder.String())
+	}
+
+	for _, peer := range conf.Peers {
+		request.WriteString(fmt.Sprintf(heredoc.Doc(`
+				public_key=%s
+				persistent_keepalive_interval=%d
+				preshared_key=%s
+			`),
+			peer.PublicKey, peer.KeepAlive, peer.PreSharedKey,
+		))
+		if peer.Endpoint != nil {
+			request.WriteString(fmt.Sprintf("endpoint=%s\n", *peer.Endpoint))
+		}
+
+		if len(peer.AllowedIPs) > 0 {
+			for _, ip := range peer.AllowedIPs {
+				request.WriteString(fmt.Sprintf("allowed_ip=%s\n", ip.String()))
+			}
+		} else {
+			request.WriteString(heredoc.Doc(`
+				allowed_ip=0.0.0.0/0
+				allowed_ip=::/0
+			`))
+		}
+	}
+
+	setting := &DeviceSetting{IpcRequest: request.String(), DNS: conf.DNS, DeviceAddr: conf.Endpoint, MTU: conf.MTU}
+	return setting, nil
 }

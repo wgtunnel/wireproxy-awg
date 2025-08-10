@@ -3,180 +3,36 @@ package wireproxy
 import (
 	"bytes"
 	"context"
-	srand "crypto/rand"
 	"crypto/subtle"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"github.com/amnezia-vpn/amneziawg-go/device"
-	"golang.org/x/net/icmp"
-	"golang.org/x/net/ipv4"
-	"golang.org/x/net/ipv6"
 	"io"
-	"log"
 	"math/rand"
 	"net"
 	"net/http"
-	"os"
 	"path"
-	"strconv"
 	"strings"
-	"sync"
 	"time"
+
+	srand "crypto/rand"
 
 	"github.com/things-go/go-socks5"
 	"github.com/things-go/go-socks5/bufferpool"
-
-	"net/netip"
-
-	"github.com/amnezia-vpn/amneziawg-go/tun/netstack"
+	"golang.org/x/net/icmp"
+	"golang.org/x/net/ipv4"
+	"golang.org/x/net/ipv6"
 )
 
-// errorLogger is the logger to print error message
-var errorLogger = log.New(os.Stderr, "ERROR: ", log.LstdFlags)
+// RoutineSpawner spawns a routine (e.g. socks5, tcp static routes) after the configuration is parsed
+type RoutineSpawner interface {
+	SpawnRoutine(ctx context.Context, vt *VirtualTun) error
+}
 
 // CredentialValidator stores the authentication data of a socks5 proxy
 type CredentialValidator struct {
 	username string
 	password string
-}
-
-// VirtualTun stores a reference to netstack network and DNS configuration
-type VirtualTun struct {
-	Tnet      *netstack.Net
-	Dev       *device.Device
-	SystemDNS bool
-	Conf      *DeviceConfig
-	// PingRecord stores the last time an IP was pinged
-	PingRecord     map[string]uint64
-	PingRecordLock *sync.Mutex
-}
-
-// RoutineSpawner spawns a routine (e.g. socks5, tcp static routes) after the configuration is parsed
-type RoutineSpawner interface {
-	SpawnRoutine(vt *VirtualTun)
-}
-
-type addressPort struct {
-	address string
-	port    uint16
-}
-
-// LookupAddr lookups a hostname.
-// DNS traffic may or may not be routed depending on VirtualTun's setting
-func (d VirtualTun) LookupAddr(ctx context.Context, name string) ([]string, error) {
-	if d.SystemDNS {
-		return net.DefaultResolver.LookupHost(ctx, name)
-	}
-	return d.Tnet.LookupContextHost(ctx, name)
-}
-
-// ResolveAddrWithContext resolves a hostname and returns an AddrPort.
-// DNS traffic may or may not be routed depending on VirtualTun's setting
-func (d VirtualTun) ResolveAddrWithContext(ctx context.Context, name string) (*netip.Addr, error) {
-	addrs, err := d.LookupAddr(ctx, name)
-	if err != nil {
-		return nil, err
-	}
-
-	size := len(addrs)
-	if size == 0 {
-		return nil, errors.New("no address found for: " + name)
-	}
-
-	rand.Shuffle(size, func(i, j int) {
-		addrs[i], addrs[j] = addrs[j], addrs[i]
-	})
-
-	var addr netip.Addr
-	for _, saddr := range addrs {
-		addr, err = netip.ParseAddr(saddr)
-		if err == nil {
-			break
-		}
-	}
-
-	if err != nil {
-		return nil, err
-	}
-
-	return &addr, nil
-}
-
-// Resolve resolves a hostname and returns an IP.
-// DNS traffic may or may not be routed depending on VirtualTun's setting
-func (d VirtualTun) Resolve(ctx context.Context, name string) (context.Context, net.IP, error) {
-	addr, err := d.ResolveAddrWithContext(ctx, name)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return ctx, addr.AsSlice(), nil
-}
-
-func parseAddressPort(endpoint string) (*addressPort, error) {
-	name, sport, err := net.SplitHostPort(endpoint)
-	if err != nil {
-		return nil, err
-	}
-
-	port, err := strconv.Atoi(sport)
-	if err != nil || port < 0 || port > 65535 {
-		return nil, &net.OpError{Op: "dial", Err: errors.New("port must be numeric")}
-	}
-
-	return &addressPort{address: name, port: uint16(port)}, nil
-}
-
-func (d VirtualTun) resolveToAddrPort(endpoint *addressPort) (*netip.AddrPort, error) {
-	addr, err := d.ResolveAddrWithContext(context.Background(), endpoint.address)
-	if err != nil {
-		return nil, err
-	}
-
-	addrPort := netip.AddrPortFrom(*addr, endpoint.port)
-	return &addrPort, nil
-}
-
-// SpawnRoutine spawns a socks5 server.
-func (config *Socks5Config) SpawnRoutine(vt *VirtualTun) {
-	var authMethods []socks5.Authenticator
-	if username := config.Username; username != "" {
-		authMethods = append(authMethods, socks5.UserPassAuthenticator{
-			Credentials: socks5.StaticCredentials{username: config.Password},
-		})
-	} else {
-		authMethods = append(authMethods, socks5.NoAuthAuthenticator{})
-	}
-
-	options := []socks5.Option{
-		socks5.WithDial(vt.Tnet.DialContext),
-		socks5.WithResolver(vt),
-		socks5.WithAuthMethods(authMethods),
-		socks5.WithBufferPool(bufferpool.NewPool(256 * 1024)),
-	}
-
-	server := socks5.NewServer(options...)
-
-	if err := server.ListenAndServe("tcp", config.BindAddress); err != nil {
-		log.Fatal(err)
-	}
-}
-
-// SpawnRoutine spawns a http server.
-func (config *HTTPConfig) SpawnRoutine(vt *VirtualTun) {
-	server := &HTTPServer{
-		config: config,
-		dial:   vt.Tnet.Dial,
-		auth:   CredentialValidator{config.Username, config.Password},
-	}
-	if config.Username != "" || config.Password != "" {
-		server.authRequired = true
-	}
-
-	if err := server.ListenAndServe("tcp", config.BindAddress); err != nil {
-		log.Fatal(err)
-	}
 }
 
 // Valid checks the authentication data in CredentialValidator and compare them
@@ -187,144 +43,13 @@ func (c CredentialValidator) Valid(username, password string) bool {
 	return u&p == 1
 }
 
-// connForward copy data from `from` to `to`
-func connForward(from io.ReadWriteCloser, to io.ReadWriteCloser) {
-	defer from.Close()
-	defer to.Close()
-
-	_, err := io.Copy(to, from)
-	if err != nil {
-		errorLogger.Printf("Cannot forward traffic: %s\n", err.Error())
-	}
-}
-
-// tcpClientForward starts a new connection via wireguard and forward traffic from `conn`
-func tcpClientForward(vt *VirtualTun, raddr *addressPort, conn net.Conn) {
-	target, err := vt.resolveToAddrPort(raddr)
-	if err != nil {
-		errorLogger.Printf("TCP Server Tunnel to %s: %s\n", target, err.Error())
-		return
-	}
-
-	tcpAddr := TCPAddrFromAddrPort(*target)
-
-	sconn, err := vt.Tnet.DialTCP(tcpAddr)
-	if err != nil {
-		errorLogger.Printf("TCP Client Tunnel to %s: %s\n", target, err.Error())
-		return
-	}
-
-	go connForward(sconn, conn)
-	go connForward(conn, sconn)
-}
-
-// STDIOTcpForward starts a new connection via wireguard and forward traffic from `conn`
-func STDIOTcpForward(vt *VirtualTun, raddr *addressPort) {
-	target, err := vt.resolveToAddrPort(raddr)
-	if err != nil {
-		errorLogger.Printf("Name resolution error for %s: %s\n", raddr.address, err.Error())
-		return
-	}
-
-	// os.Stdout has previously been remapped to stderr, se we can't use it
-	stdout, err := os.OpenFile("/dev/stdout", os.O_WRONLY, 0)
-	if err != nil {
-		errorLogger.Printf("Failed to open /dev/stdout: %s\n", err.Error())
-		return
-	}
-
-	tcpAddr := TCPAddrFromAddrPort(*target)
-	sconn, err := vt.Tnet.DialTCP(tcpAddr)
-	if err != nil {
-		errorLogger.Printf("TCP Client Tunnel to %s (%s): %s\n", target, tcpAddr, err.Error())
-		return
-	}
-
-	go connForward(os.Stdin, sconn)
-	go connForward(sconn, stdout)
-}
-
-// SpawnRoutine spawns a local TCP server which acts as a proxy to the specified target
-func (conf *TCPClientTunnelConfig) SpawnRoutine(vt *VirtualTun) {
-	raddr, err := parseAddressPort(conf.Target)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	server, err := net.ListenTCP("tcp", conf.BindAddress)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	for {
-		conn, err := server.Accept()
-		if err != nil {
-			log.Fatal(err)
-		}
-		go tcpClientForward(vt, raddr, conn)
-	}
-}
-
-// SpawnRoutine connects to the specified target and plumbs it to STDIN / STDOUT
-func (conf *STDIOTunnelConfig) SpawnRoutine(vt *VirtualTun) {
-	raddr, err := parseAddressPort(conf.Target)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	go STDIOTcpForward(vt, raddr)
-}
-
-// tcpServerForward starts a new connection locally and forward traffic from `conn`
-func tcpServerForward(vt *VirtualTun, raddr *addressPort, conn net.Conn) {
-	target, err := vt.resolveToAddrPort(raddr)
-	if err != nil {
-		errorLogger.Printf("TCP Server Tunnel to %s: %s\n", target, err.Error())
-		return
-	}
-
-	tcpAddr := TCPAddrFromAddrPort(*target)
-
-	sconn, err := net.DialTCP("tcp", nil, tcpAddr)
-	if err != nil {
-		errorLogger.Printf("TCP Server Tunnel to %s: %s\n", target, err.Error())
-		return
-	}
-
-	go connForward(sconn, conn)
-	go connForward(conn, sconn)
-
-}
-
-// SpawnRoutine spawns a TCP server on wireguard which acts as a proxy to the specified target
-func (conf *TCPServerTunnelConfig) SpawnRoutine(vt *VirtualTun) {
-	raddr, err := parseAddressPort(conf.Target)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	addr := &net.TCPAddr{Port: conf.ListenPort}
-	server, err := vt.Tnet.ListenTCP(addr)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	for {
-		conn, err := server.Accept()
-		if err != nil {
-			log.Fatal(err)
-		}
-		go tcpServerForward(vt, raddr, conn)
-	}
-}
-
-func (d VirtualTun) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	log.Printf("Health metric request: %s\n", r.URL.Path)
+func (d *VirtualTun) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	d.Logger.Verbosef("Health metric request: %s", r.URL.Path)
 	switch path.Clean(r.URL.Path) {
 	case "/readyz":
 		body, err := json.Marshal(d.PingRecord)
 		if err != nil {
-			errorLogger.Printf("Failed to get device metrics: %s\n", err.Error())
+			d.Logger.Errorf("Failed to get device metrics: %v", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
@@ -345,7 +70,7 @@ func (d VirtualTun) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/metrics":
 		get, err := d.Dev.IpcGet()
 		if err != nil {
-			errorLogger.Printf("Failed to get device metrics: %s\n", err.Error())
+			d.Logger.Errorf("Failed to get device metrics: %v", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
@@ -372,11 +97,11 @@ func (d VirtualTun) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (d VirtualTun) pingIPs() {
+func (d *VirtualTun) pingIPs() {
 	for _, addr := range d.Conf.CheckAlive {
 		socket, err := d.Tnet.Dial("ping", addr.String())
 		if err != nil {
-			errorLogger.Printf("Failed to ping %s: %s\n", addr, err.Error())
+			d.Logger.Errorf("Failed to ping %s: %v", addr, err)
 			continue
 		}
 
@@ -394,14 +119,14 @@ func (d VirtualTun) pingIPs() {
 		} else if addr.Is6() {
 			icmpBytes, _ = (&icmp.Message{Type: ipv6.ICMPTypeEchoRequest, Code: 0, Body: &requestPing}).Marshal(nil)
 		} else {
-			errorLogger.Printf("Failed to ping %s: invalid address: %s\n", addr, addr.String())
+			d.Logger.Errorf("Failed to ping %s: invalid address: %s", addr, addr.String())
 			continue
 		}
 
 		_ = socket.SetReadDeadline(time.Now().Add(time.Duration(d.Conf.CheckAliveInterval) * time.Second))
 		_, err = socket.Write(icmpBytes)
 		if err != nil {
-			errorLogger.Printf("Failed to ping %s: %s\n", addr, err.Error())
+			d.Logger.Errorf("Failed to ping %s: %v", addr, err)
 			continue
 		}
 
@@ -409,24 +134,24 @@ func (d VirtualTun) pingIPs() {
 		go func() {
 			n, err := socket.Read(icmpBytes[:])
 			if err != nil {
-				errorLogger.Printf("Failed to read ping response from %s: %s\n", addr, err.Error())
+				d.Logger.Errorf("Failed to read ping response from %s: %v", addr, err)
 				return
 			}
 
 			replyPacket, err := icmp.ParseMessage(1, icmpBytes[:n])
 			if err != nil {
-				errorLogger.Printf("Failed to parse ping response from %s: %s\n", addr, err.Error())
+				d.Logger.Errorf("Failed to parse ping response from %s: %v", addr, err)
 				return
 			}
 
 			if addr.Is4() {
 				replyPing, ok := replyPacket.Body.(*icmp.Echo)
 				if !ok {
-					errorLogger.Printf("Failed to parse ping response from %s: invalid reply type: %s\n", addr, replyPacket.Type)
+					d.Logger.Errorf("Failed to parse ping response from %s: invalid reply type: %s", addr, replyPacket.Type)
 					return
 				}
 				if !bytes.Equal(replyPing.Data, requestPing.Data) || replyPing.Seq != requestPing.Seq {
-					errorLogger.Printf("Failed to parse ping response from %s: invalid ping reply: %v\n", addr, replyPing)
+					d.Logger.Errorf("Failed to parse ping response from %s: invalid ping reply: %v", addr, replyPing)
 					return
 				}
 			}
@@ -434,14 +159,14 @@ func (d VirtualTun) pingIPs() {
 			if addr.Is6() {
 				replyPing, ok := replyPacket.Body.(*icmp.RawBody)
 				if !ok {
-					errorLogger.Printf("Failed to parse ping response from %s: invalid reply type: %s\n", addr, replyPacket.Type)
+					d.Logger.Errorf("Failed to parse ping response from %s: invalid reply type: %s", addr, replyPacket.Type)
 					return
 				}
 
 				seq := binary.BigEndian.Uint16(replyPing.Data[2:4])
 				pongBody := replyPing.Data[4:]
 				if !bytes.Equal(pongBody, requestPing.Data) || int(seq) != requestPing.Seq {
-					errorLogger.Printf("Failed to parse ping response from %s: invalid ping reply: %v\n", addr, replyPing)
+					d.Logger.Errorf("Failed to parse ping response from %s: invalid ping reply: %v", addr, replyPing)
 					return
 				}
 			}
@@ -455,7 +180,7 @@ func (d VirtualTun) pingIPs() {
 	}
 }
 
-func (d VirtualTun) StartPingIPs() {
+func (d *VirtualTun) StartPingIPs() {
 	for _, addr := range d.Conf.CheckAlive {
 		d.PingRecord[addr.String()] = 0
 	}
@@ -466,4 +191,114 @@ func (d VirtualTun) StartPingIPs() {
 			time.Sleep(time.Duration(d.Conf.CheckAliveInterval) * time.Second)
 		}
 	}()
+}
+
+// SpawnRoutine spawns a socks5 server.
+func (config *Socks5Config) SpawnRoutine(ctx context.Context, vt *VirtualTun) error {
+	logger := vt.Logger
+	logger.Verbosef("SOCKS5 SpawnRoutine started for bindAddress %s", config.BindAddress)
+	var authMethods []socks5.Authenticator
+	if username := config.Username; username != "" {
+		logger.Verbosef("SOCKS5 using authentication with username %s", username)
+		authMethods = append(authMethods, socks5.UserPassAuthenticator{
+			Credentials: socks5.StaticCredentials{username: config.Password},
+		})
+	} else {
+		logger.Verbosef("SOCKS5 using no authentication")
+		authMethods = append(authMethods, socks5.NoAuthAuthenticator{})
+	}
+
+	options := []socks5.Option{
+		socks5.WithDial(func(ctx context.Context, network, addr string) (net.Conn, error) {
+			conn, err := vt.Tnet.DialContext(ctx, network, addr)
+			if err != nil {
+				logger.Errorf("SOCKS5 WithDial failed: %v", err)
+			}
+			return conn, err
+		}),
+		// Removed WithResolver(vt) to forward hostnames to Tnet for resolution through the tunnel
+		socks5.WithAuthMethods(authMethods),
+		socks5.WithBufferPool(bufferpool.NewPool(256 * 1024))}
+
+	server := socks5.NewServer(options...)
+	logger.Verbosef("SOCKS5 server object created")
+
+	listener, err := net.Listen("tcp", config.BindAddress)
+	if err != nil {
+		logger.Errorf("SOCKS5 net.Listen failed: %v", err)
+		return err
+	}
+	logger.Verbosef("SOCKS5 listener bound successfully on %s", config.BindAddress)
+
+	errCh := make(chan error, 1)
+	go func() {
+		logger.Verbosef("SOCKS5 accept loop started")
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				// Suppress shutdown-related errors
+				if errors.Is(err, net.ErrClosed) || strings.Contains(err.Error(), "use of closed network connection") || errors.Is(err, context.Canceled) {
+					errCh <- nil
+					return
+				}
+				logger.Errorf("SOCKS5 accept error: %v", err)
+				errCh <- err
+				return
+			}
+			go func(conn net.Conn) {
+				defer func(conn net.Conn) {
+					err := conn.Close()
+					if err != nil && !errors.Is(err, net.ErrClosed) {
+						logger.Errorf("SOCKS5 network connect close failed: %v", err)
+					}
+				}(conn)
+				if err := server.ServeConn(conn); err != nil {
+					if !strings.Contains(err.Error(), "connection reset by peer") &&
+						err != io.EOF &&
+						!strings.Contains(err.Error(), "operation aborted") && // read/write aborts
+						!errors.Is(err, net.ErrClosed) && // Closed connections
+						!errors.Is(err, context.Canceled) { // Context shutdown
+						logger.Errorf("SOCKS5 ServeConn error for %s: %v", conn.RemoteAddr(), err)
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	select {
+	case err := <-errCh:
+		listener.Close() // Clean up listener on natural error
+		if err != nil {
+			logger.Errorf("SOCKS5 SpawnRoutine error: %v", err)
+		}
+		return err
+	case <-ctx.Done():
+		logger.Verbosef("SOCKS5 SpawnRoutine context done: %v", ctx.Err())
+		if err := listener.Close(); err != nil { // Close to unblock Accept()
+			logger.Errorf("SOCKS5 listener close failed: %v", err)
+		}
+		<-errCh // Drain to wait for goroutine exit (ignores the triggered accept error)
+		return ctx.Err()
+	}
+}
+
+// SpawnRoutine spawns an http server.
+func (config *HTTPConfig) SpawnRoutine(ctx context.Context, vt *VirtualTun) error {
+	logger := vt.Logger
+	logger.Verbosef("HTTP SpawnRoutine started for bindAddress %s", config.BindAddress)
+
+	server := &HTTPServer{
+		config:       config,
+		dial:         vt.Tnet.Dial,
+		auth:         CredentialValidator{config.Username, config.Password},
+		logger:       logger,
+		authRequired: config.Username != "" || config.Password != "",
+	}
+	if server.authRequired {
+		logger.Verbosef("HTTP using authentication with username %s", config.Username)
+	} else {
+		logger.Verbosef("HTTP using no authentication")
+	}
+
+	return server.ListenAndServe(ctx, "tcp", config.BindAddress)
 }

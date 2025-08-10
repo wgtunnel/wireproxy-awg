@@ -3,13 +3,16 @@ package wireproxy
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"strings"
+
+	"github.com/amnezia-vpn/amneziawg-go/device"
 )
 
 const proxyAuthHeaderKey = "Proxy-Authorization"
@@ -20,6 +23,7 @@ type HTTPServer struct {
 	auth CredentialValidator
 	dial func(network, address string) (net.Conn, error)
 
+	logger       *device.Logger
 	authRequired bool
 }
 
@@ -95,7 +99,9 @@ func (s *HTTPServer) serve(conn net.Conn) {
 	var rd = bufio.NewReader(conn)
 	req, err := http.ReadRequest(rd)
 	if err != nil {
-		log.Printf("read request failed: %s\n", err)
+		if !strings.Contains(err.Error(), "connection reset by peer") && err != io.EOF {
+			s.logger.Errorf("HTTP read request failed: %v", err)
+		}
 		return
 	}
 
@@ -106,7 +112,7 @@ func (s *HTTPServer) serve(conn net.Conn) {
 			resp.Header.Set("Proxy-Authenticate", "Basic realm=\"Proxy\"")
 		}
 		_ = resp.Write(conn)
-		log.Println(err)
+		s.logger.Errorf("HTTP authentication failed: %v", err)
 		return
 	}
 
@@ -118,15 +124,17 @@ func (s *HTTPServer) serve(conn net.Conn) {
 		peer, err = s.handle(req)
 	default:
 		_ = responseWith(req, http.StatusMethodNotAllowed).Write(conn)
-		log.Printf("unsupported protocol: %s\n", req.Method)
+		s.logger.Errorf("HTTP unsupported protocol: %s", req.Method)
 		return
 	}
 	if err != nil {
-		log.Printf("dial proxy failed: %s\n", err)
+		if !strings.Contains(err.Error(), "connection reset by peer") && err != io.EOF {
+			s.logger.Errorf("HTTP handle failed: %v", err)
+		}
 		return
 	}
 	if peer == nil {
-		log.Println("dial proxy failed: peer nil")
+		s.logger.Errorf("HTTP handle failed: peer nil")
 		return
 	}
 
@@ -134,33 +142,73 @@ func (s *HTTPServer) serve(conn net.Conn) {
 		defer conn.Close()
 		defer peer.Close()
 
-		_, _ = io.Copy(conn, peer)
+		_, err := io.Copy(conn, peer)
+		if err != nil && !strings.Contains(err.Error(), "connection reset by peer") && err != io.EOF {
+			s.logger.Errorf("HTTP io.Copy (peer to conn) error: %v", err)
+		}
 	}()
 
 	go func() {
 		defer conn.Close()
 		defer peer.Close()
 
-		_, _ = io.Copy(peer, conn)
+		_, err := io.Copy(peer, conn)
+		if err != nil && !strings.Contains(err.Error(), "connection reset by peer") && err != io.EOF {
+			s.logger.Errorf("HTTP io.Copy (conn to peer) error: %v", err)
+		}
 	}()
 }
 
 // ListenAndServe is used to create a listener and serve on it
-func (s *HTTPServer) ListenAndServe(network, addr string) error {
-	server, err := net.Listen(network, addr)
+func (s *HTTPServer) ListenAndServe(ctx context.Context, network, addr string) error {
+	listener, err := net.Listen(network, addr)
 	if err != nil {
-		return fmt.Errorf("listen tcp failed: %w", err)
+		s.logger.Errorf("HTTP net.Listen failed: %v", err)
+		return err
 	}
-	defer func(server net.Listener) {
-		_ = server.Close()
-	}(server)
-	for {
-		conn, err := server.Accept()
-		if err != nil {
-			return fmt.Errorf("accept request failed: %w", err)
+	s.logger.Verbosef("HTTP listener bound successfully on %s", addr)
+
+	errCh := make(chan error, 1)
+	go func() {
+		s.logger.Verbosef("HTTP accept loop started")
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				// Suppress shutdown-related errors
+				if errors.Is(err, net.ErrClosed) || strings.Contains(err.Error(), "use of closed network connection") || errors.Is(err, context.Canceled) {
+					errCh <- nil
+					return
+				}
+				s.logger.Errorf("HTTP accept error: %v", err)
+				errCh <- err
+				return
+			}
+			go func(conn net.Conn) {
+				defer func() {
+					if err := conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+						s.logger.Errorf("HTTP connection close failed: %v", err)
+					}
+				}()
+				s.serve(conn)
+			}(conn)
 		}
-		go func(conn net.Conn) {
-			s.serve(conn)
-		}(conn)
+	}()
+
+	select {
+	case err := <-errCh:
+		if closeErr := listener.Close(); closeErr != nil {
+			s.logger.Errorf("HTTP listener close failed: %v", closeErr)
+		}
+		if err != nil {
+			s.logger.Errorf("HTTP ListenAndServe error: %v", err)
+		}
+		return err
+	case <-ctx.Done():
+		s.logger.Verbosef("HTTP ListenAndServe context done: %v", ctx.Err())
+		if err := listener.Close(); err != nil {
+			s.logger.Errorf("HTTP listener close failed: %v", err)
+		}
+		<-errCh // Drain to wait for goroutine exit (ignores the triggered accept error)
+		return ctx.Err()
 	}
 }
