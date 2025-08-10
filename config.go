@@ -718,6 +718,33 @@ func ParseConfig(path string) (*Configuration, error) {
 		return nil, err
 	}
 
+	return Parse(cfg)
+}
+
+// ParseConfigString takes the config as a string and parses it into Configuration
+func ParseConfigString(config string) (*Configuration, error) {
+	iniOpt := ini.LoadOptions{
+		Insensitive:            true,
+		AllowShadows:           true,
+		AllowNonUniqueSections: true,
+	}
+
+	cfg, err := ini.LoadSources(iniOpt, []byte(config))
+	if err != nil {
+		return nil, err
+	}
+
+	return Parse(cfg)
+
+}
+
+func Parse(cfg *ini.File) (*Configuration, error) {
+	iniOpt := ini.LoadOptions{
+		Insensitive:            true,
+		AllowShadows:           true,
+		AllowNonUniqueSections: true,
+	}
+
 	device := &DeviceConfig{
 		MTU: 1420,
 	}

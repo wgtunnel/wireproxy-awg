@@ -97,7 +97,7 @@ func CreateIPCRequest(conf *DeviceConfig) (*DeviceSetting, error) {
 		} else {
 			request.WriteString(heredoc.Doc(`
 				allowed_ip=0.0.0.0/0
-				allowed_ip=::0/0
+				allowed_ip=::/0
 			`))
 		}
 	}
@@ -107,7 +107,7 @@ func CreateIPCRequest(conf *DeviceConfig) (*DeviceSetting, error) {
 }
 
 // StartWireguard creates a tun interface on netstack given a configuration
-func StartWireguard(conf *DeviceConfig, logLevel int) (*VirtualTun, error) {
+func StartWireguard(conf *DeviceConfig, logger *device.Logger) (*VirtualTun, error) {
 	setting, err := CreateIPCRequest(conf)
 	if err != nil {
 		return nil, err
@@ -117,7 +117,7 @@ func StartWireguard(conf *DeviceConfig, logLevel int) (*VirtualTun, error) {
 	if err != nil {
 		return nil, err
 	}
-	dev := device.NewDevice(tun, conn.NewDefaultBind(), device.NewLogger(logLevel, ""))
+	dev := device.NewDevice(tun, conn.NewDefaultBind(), logger)
 	err = dev.IpcSet(setting.IpcRequest)
 	if err != nil {
 		return nil, err
