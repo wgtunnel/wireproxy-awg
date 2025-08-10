@@ -1,4 +1,4 @@
-module github.com/artem-russkikh/wireproxy-awg
+module github.com/wgtunnel/wireproxy-awg
 
 go 1.24.4
 
