@@ -45,7 +45,7 @@ type CredentialValidator struct {
 // VirtualTun stores a reference to netstack network and DNS configuration
 type VirtualTun struct {
 	Tnet      *netstack.Net
-	Dev       *device.Device
+	Dev       device.Device
 	SystemDNS bool
 	Conf      *DeviceConfig
 	// PingRecord stores the last time an IP was pinged
@@ -65,7 +65,7 @@ type addressPort struct {
 
 // LookupAddr lookups a hostname.
 // DNS traffic may or may not be routed depending on VirtualTun's setting
-func (d VirtualTun) LookupAddr(ctx context.Context, name string) ([]string, error) {
+func (d *VirtualTun) LookupAddr(ctx context.Context, name string) ([]string, error) {
 	if d.SystemDNS {
 		return net.DefaultResolver.LookupHost(ctx, name)
 	}
@@ -74,7 +74,7 @@ func (d VirtualTun) LookupAddr(ctx context.Context, name string) ([]string, erro
 
 // ResolveAddrWithContext resolves a hostname and returns an AddrPort.
 // DNS traffic may or may not be routed depending on VirtualTun's setting
-func (d VirtualTun) ResolveAddrWithContext(ctx context.Context, name string) (*netip.Addr, error) {
+func (d *VirtualTun) ResolveAddrWithContext(ctx context.Context, name string) (*netip.Addr, error) {
 	addrs, err := d.LookupAddr(ctx, name)
 	if err != nil {
 		return nil, err
@@ -106,7 +106,7 @@ func (d VirtualTun) ResolveAddrWithContext(ctx context.Context, name string) (*n
 
 // Resolve resolves a hostname and returns an IP.
 // DNS traffic may or may not be routed depending on VirtualTun's setting
-func (d VirtualTun) Resolve(ctx context.Context, name string) (context.Context, net.IP, error) {
+func (d *VirtualTun) Resolve(ctx context.Context, name string) (context.Context, net.IP, error) {
 	addr, err := d.ResolveAddrWithContext(ctx, name)
 	if err != nil {
 		return nil, nil, err
@@ -129,7 +129,7 @@ func parseAddressPort(endpoint string) (*addressPort, error) {
 	return &addressPort{address: name, port: uint16(port)}, nil
 }
 
-func (d VirtualTun) resolveToAddrPort(endpoint *addressPort) (*netip.AddrPort, error) {
+func (d *VirtualTun) resolveToAddrPort(endpoint *addressPort) (*netip.AddrPort, error) {
 	addr, err := d.ResolveAddrWithContext(context.Background(), endpoint.address)
 	if err != nil {
 		return nil, err
@@ -384,7 +384,7 @@ func (conf *TCPServerTunnelConfig) SpawnRoutine(ctx context.Context, vt *Virtual
 	}
 }
 
-func (d VirtualTun) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (d *VirtualTun) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Health metric request: %s\n", r.URL.Path)
 	switch path.Clean(r.URL.Path) {
 	case "/readyz":
@@ -438,7 +438,7 @@ func (d VirtualTun) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (d VirtualTun) pingIPs() {
+func (d *VirtualTun) pingIPs() {
 	for _, addr := range d.Conf.CheckAlive {
 		socket, err := d.Tnet.Dial("ping", addr.String())
 		if err != nil {
@@ -521,7 +521,7 @@ func (d VirtualTun) pingIPs() {
 	}
 }
 
-func (d VirtualTun) StartPingIPs() {
+func (d *VirtualTun) StartPingIPs() {
 	for _, addr := range d.Conf.CheckAlive {
 		d.PingRecord[addr.String()] = 0
 	}
