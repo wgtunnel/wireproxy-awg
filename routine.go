@@ -8,10 +8,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"github.com/amnezia-vpn/amneziawg-go/device"
-	"golang.org/x/net/icmp"
-	"golang.org/x/net/ipv4"
-	"golang.org/x/net/ipv6"
 	"io"
 	"log"
 	"math/rand"
@@ -23,6 +19,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/amnezia-vpn/amneziawg-go/device"
+	"golang.org/x/net/icmp"
+	"golang.org/x/net/ipv4"
+	"golang.org/x/net/ipv6"
 
 	"github.com/things-go/go-socks5"
 	"github.com/things-go/go-socks5/bufferpool"
@@ -54,7 +55,7 @@ type VirtualTun struct {
 
 // RoutineSpawner spawns a routine (e.g. socks5, tcp static routes) after the configuration is parsed
 type RoutineSpawner interface {
-	SpawnRoutine(vt *VirtualTun)
+	SpawnRoutine(ctx context.Context, vt *VirtualTun) error
 }
 
 type addressPort struct {
@@ -139,7 +140,7 @@ func (d VirtualTun) resolveToAddrPort(endpoint *addressPort) (*netip.AddrPort, e
 }
 
 // SpawnRoutine spawns a socks5 server.
-func (config *Socks5Config) SpawnRoutine(vt *VirtualTun) {
+func (config *Socks5Config) SpawnRoutine(ctx context.Context, vt *VirtualTun) error {
 	var authMethods []socks5.Authenticator
 	if username := config.Username; username != "" {
 		authMethods = append(authMethods, socks5.UserPassAuthenticator{
@@ -158,13 +159,21 @@ func (config *Socks5Config) SpawnRoutine(vt *VirtualTun) {
 
 	server := socks5.NewServer(options...)
 
-	if err := server.ListenAndServe("tcp", config.BindAddress); err != nil {
-		log.Fatal(err)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.ListenAndServe("tcp", config.BindAddress)
+	}()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-errCh:
+		return err
 	}
 }
 
 // SpawnRoutine spawns a http server.
-func (config *HTTPConfig) SpawnRoutine(vt *VirtualTun) {
+func (config *HTTPConfig) SpawnRoutine(ctx context.Context, vt *VirtualTun) error {
 	server := &HTTPServer{
 		config: config,
 		dial:   vt.Tnet.Dial,
@@ -174,8 +183,16 @@ func (config *HTTPConfig) SpawnRoutine(vt *VirtualTun) {
 		server.authRequired = true
 	}
 
-	if err := server.ListenAndServe("tcp", config.BindAddress); err != nil {
-		log.Fatal(err)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.ListenAndServe("tcp", config.BindAddress)
+	}()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-errCh:
+		return err
 	}
 }
 
@@ -219,19 +236,19 @@ func tcpClientForward(vt *VirtualTun, raddr *addressPort, conn net.Conn) {
 }
 
 // STDIOTcpForward starts a new connection via wireguard and forward traffic from `conn`
-func STDIOTcpForward(vt *VirtualTun, raddr *addressPort) {
+func STDIOTcpForward(ctx context.Context, vt *VirtualTun, raddr *addressPort) {
 	target, err := vt.resolveToAddrPort(raddr)
 	if err != nil {
 		errorLogger.Printf("Name resolution error for %s: %s\n", raddr.address, err.Error())
 		return
 	}
 
-	// os.Stdout has previously been remapped to stderr, se we can't use it
 	stdout, err := os.OpenFile("/dev/stdout", os.O_WRONLY, 0)
 	if err != nil {
 		errorLogger.Printf("Failed to open /dev/stdout: %s\n", err.Error())
 		return
 	}
+	defer stdout.Close()
 
 	tcpAddr := TCPAddrFromAddrPort(*target)
 	sconn, err := vt.Tnet.DialTCP(tcpAddr)
@@ -239,40 +256,78 @@ func STDIOTcpForward(vt *VirtualTun, raddr *addressPort) {
 		errorLogger.Printf("TCP Client Tunnel to %s (%s): %s\n", target, tcpAddr, err.Error())
 		return
 	}
+	defer sconn.Close()
 
-	go connForward(os.Stdin, sconn)
-	go connForward(sconn, stdout)
+	done := make(chan struct{})
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			sconn.Close()
+			// stdout will be closed by defer
+		case <-done:
+			// normal completion, do nothing
+		}
+	}()
+
+	go func() {
+		connForward(os.Stdin, sconn)
+		close(done)
+	}()
+	connForward(sconn, stdout)
 }
 
 // SpawnRoutine spawns a local TCP server which acts as a proxy to the specified target
-func (conf *TCPClientTunnelConfig) SpawnRoutine(vt *VirtualTun) {
+func (conf *TCPClientTunnelConfig) SpawnRoutine(ctx context.Context, vt *VirtualTun) error {
 	raddr, err := parseAddressPort(conf.Target)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	server, err := net.ListenTCP("tcp", conf.BindAddress)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
+
+	// Accept loop with context cancellation support
+	go func() {
+		<-ctx.Done()
+		_ = server.Close()
+	}()
 
 	for {
 		conn, err := server.Accept()
 		if err != nil {
-			log.Fatal(err)
+			select {
+			case <-ctx.Done():
+				return ctx.Err() // normal shutdown
+			default:
+				return err // unexpected error
+			}
 		}
 		go tcpClientForward(vt, raddr, conn)
 	}
 }
 
 // SpawnRoutine connects to the specified target and plumbs it to STDIN / STDOUT
-func (conf *STDIOTunnelConfig) SpawnRoutine(vt *VirtualTun) {
+func (conf *STDIOTunnelConfig) SpawnRoutine(ctx context.Context, vt *VirtualTun) error {
 	raddr, err := parseAddressPort(conf.Target)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
-	go STDIOTcpForward(vt, raddr)
+	done := make(chan struct{})
+	go func() {
+		STDIOTcpForward(ctx, vt, raddr)
+		close(done)
+	}()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-done:
+		return nil
+	}
 }
 
 // tcpServerForward starts a new connection locally and forward traffic from `conn`
@@ -297,22 +352,33 @@ func tcpServerForward(vt *VirtualTun, raddr *addressPort, conn net.Conn) {
 }
 
 // SpawnRoutine spawns a TCP server on wireguard which acts as a proxy to the specified target
-func (conf *TCPServerTunnelConfig) SpawnRoutine(vt *VirtualTun) {
+func (conf *TCPServerTunnelConfig) SpawnRoutine(ctx context.Context, vt *VirtualTun) error {
 	raddr, err := parseAddressPort(conf.Target)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	addr := &net.TCPAddr{Port: conf.ListenPort}
 	server, err := vt.Tnet.ListenTCP(addr)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
+
+	// Accept loop with context cancellation support
+	go func() {
+		<-ctx.Done()
+		_ = server.Close()
+	}()
 
 	for {
 		conn, err := server.Accept()
 		if err != nil {
-			log.Fatal(err)
+			select {
+			case <-ctx.Done():
+				return ctx.Err() // normal shutdown
+			default:
+				return err // unexpected error
+			}
 		}
 		go tcpServerForward(vt, raddr, conn)
 	}

@@ -8,9 +8,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/go-ini/ini"
-
 	"net/netip"
+
+	"github.com/go-ini/ini"
 )
 
 type PeerConfig struct {
