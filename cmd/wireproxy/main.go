@@ -16,7 +16,7 @@ import (
 
 	"github.com/akamensky/argparse"
 	"github.com/amnezia-vpn/amneziawg-go/device"
-	wireproxyawg "github.com/artem-russkikh/wireproxy-awg"
+	wireproxyawg "github.com/wgtunnel/wireproxy-awg"
 	"suah.dev/protect"
 )
 

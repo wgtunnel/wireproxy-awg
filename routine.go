@@ -45,7 +45,7 @@ type CredentialValidator struct {
 // VirtualTun stores a reference to netstack network and DNS configuration
 type VirtualTun struct {
 	Tnet      *netstack.Net
-	Dev       device.Device
+	Dev       *device.Device
 	SystemDNS bool
 	Conf      *DeviceConfig
 	// PingRecord stores the last time an IP was pinged
