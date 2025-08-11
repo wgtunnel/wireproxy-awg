@@ -140,6 +140,7 @@ func (d *VirtualTun) resolveToAddrPort(endpoint *addressPort) (*netip.AddrPort, 
 }
 
 // SpawnRoutine spawns a socks5 server.
+// SpawnRoutine spawns a socks5 server.
 func (config *Socks5Config) SpawnRoutine(ctx context.Context, vt *VirtualTun) error {
 	var authMethods []socks5.Authenticator
 	if username := config.Username; username != "" {
@@ -159,15 +160,24 @@ func (config *Socks5Config) SpawnRoutine(ctx context.Context, vt *VirtualTun) er
 
 	server := socks5.NewServer(options...)
 
+	log.Printf("Starting SOCKS5 server on %s", config.BindAddress) // Add logging
+
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- server.ListenAndServe("tcp", config.BindAddress)
+		if err := server.ListenAndServe("tcp", config.BindAddress); err != nil {
+			log.Printf("SOCKS5 ListenAndServe failed: %v", err) // Log error
+		}
+		errCh <- nil // Or send the error if you want to propagate
 	}()
 
 	select {
 	case <-ctx.Done():
+		log.Printf("SOCKS5 server context canceled: %v", ctx.Err()) // Log cancellation
 		return ctx.Err()
 	case err := <-errCh:
+		if err != nil {
+			log.Printf("SOCKS5 server error: %v", err) // Log any error
+		}
 		return err
 	}
 }
