@@ -46,6 +46,7 @@ type CredentialValidator struct {
 type VirtualTun struct {
 	Tnet      *netstack.Net
 	Dev       *device.Device
+	Logger    *device.Logger // Added for logging
 	SystemDNS bool
 	Conf      *DeviceConfig
 	// PingRecord stores the last time an IP was pinged
@@ -66,6 +67,7 @@ type addressPort struct {
 // LookupAddr lookups a hostname.
 // DNS traffic may or may not be routed depending on VirtualTun's setting
 func (d *VirtualTun) LookupAddr(ctx context.Context, name string) ([]string, error) {
+	d.Logger.Verbosef("LookupAddr: name=%s, systemDNS=%v", name, d.SystemDNS)
 	if d.SystemDNS {
 		return net.DefaultResolver.LookupHost(ctx, name)
 	}
@@ -75,13 +77,16 @@ func (d *VirtualTun) LookupAddr(ctx context.Context, name string) ([]string, err
 // ResolveAddrWithContext resolves a hostname and returns an AddrPort.
 // DNS traffic may or may not be routed depending on VirtualTun's setting
 func (d *VirtualTun) ResolveAddrWithContext(ctx context.Context, name string) (*netip.Addr, error) {
+	d.Logger.Verbosef("ResolveAddrWithContext: name=%s", name)
 	addrs, err := d.LookupAddr(ctx, name)
 	if err != nil {
+		d.Logger.Errorf("LookupAddr failed: %v", err)
 		return nil, err
 	}
 
 	size := len(addrs)
 	if size == 0 {
+		d.Logger.Errorf("No addresses found for %s", name)
 		return nil, errors.New("no address found for: " + name)
 	}
 
@@ -98,6 +103,7 @@ func (d *VirtualTun) ResolveAddrWithContext(ctx context.Context, name string) (*
 	}
 
 	if err != nil {
+		d.Logger.Errorf("ParseAddr failed: %v", err)
 		return nil, err
 	}
 
@@ -107,8 +113,10 @@ func (d *VirtualTun) ResolveAddrWithContext(ctx context.Context, name string) (*
 // Resolve resolves a hostname and returns an IP.
 // DNS traffic may or may not be routed depending on VirtualTun's setting
 func (d *VirtualTun) Resolve(ctx context.Context, name string) (context.Context, net.IP, error) {
+	d.Logger.Verbosef("Resolve: name=%s", name)
 	addr, err := d.ResolveAddrWithContext(ctx, name)
 	if err != nil {
+		d.Logger.Errorf("ResolveAddrWithContext failed: %v", err)
 		return nil, nil, err
 	}
 
@@ -130,8 +138,10 @@ func parseAddressPort(endpoint string) (*addressPort, error) {
 }
 
 func (d *VirtualTun) resolveToAddrPort(endpoint *addressPort) (*netip.AddrPort, error) {
+	d.Logger.Verbosef("resolveToAddrPort: address=%s, port=%d", endpoint.address, endpoint.port)
 	addr, err := d.ResolveAddrWithContext(context.Background(), endpoint.address)
 	if err != nil {
+		d.Logger.Errorf("ResolveAddrWithContext failed: %v", err)
 		return nil, err
 	}
 
@@ -140,43 +150,81 @@ func (d *VirtualTun) resolveToAddrPort(endpoint *addressPort) (*netip.AddrPort, 
 }
 
 // SpawnRoutine spawns a socks5 server.
-// SpawnRoutine spawns a socks5 server.
 func (config *Socks5Config) SpawnRoutine(ctx context.Context, vt *VirtualTun) error {
+	logger := vt.Logger
+	logger.Verbosef("SOCKS5 SpawnRoutine started for bindAddress %s", config.BindAddress)
 	var authMethods []socks5.Authenticator
 	if username := config.Username; username != "" {
+		logger.Verbosef("SOCKS5 using authentication with username %s", username)
 		authMethods = append(authMethods, socks5.UserPassAuthenticator{
 			Credentials: socks5.StaticCredentials{username: config.Password},
 		})
 	} else {
+		logger.Verbosef("SOCKS5 using no authentication")
 		authMethods = append(authMethods, socks5.NoAuthAuthenticator{})
 	}
 
 	options := []socks5.Option{
-		socks5.WithDial(vt.Tnet.DialContext),
+		socks5.WithDial(func(ctx context.Context, network, addr string) (net.Conn, error) {
+			logger.Verbosef("SOCKS5 WithDial: network %s, addr %s", network, addr)
+			conn, err := vt.Tnet.DialContext(ctx, network, addr)
+			if err != nil {
+				logger.Errorf("SOCKS5 WithDial failed: %v", err)
+			}
+			return conn, err
+		}),
 		socks5.WithResolver(vt),
 		socks5.WithAuthMethods(authMethods),
 		socks5.WithBufferPool(bufferpool.NewPool(256 * 1024)),
 	}
 
 	server := socks5.NewServer(options...)
+	logger.Verbosef("SOCKS5 server object created")
 
-	log.Printf("Starting SOCKS5 server on %s", config.BindAddress) // Add logging
+	listener, err := net.Listen("tcp", config.BindAddress)
+	if err != nil {
+		logger.Errorf("SOCKS5 net.Listen failed: %v", err)
+		return err
+	}
+	logger.Verbosef("SOCKS5 listener bound successfully on %s", config.BindAddress)
 
 	errCh := make(chan error, 1)
 	go func() {
-		if err := server.ListenAndServe("tcp", config.BindAddress); err != nil {
-			log.Printf("SOCKS5 ListenAndServe failed: %v", err) // Log error
+		defer listener.Close()
+		logger.Verbosef("SOCKS5 accept loop started")
+		for {
+			select {
+			case <-ctx.Done():
+				logger.Verbosef("SOCKS5 accept loop context done: %v", ctx.Err())
+				errCh <- ctx.Err()
+				return
+			default:
+				conn, err := listener.Accept()
+				if err != nil {
+					logger.Errorf("SOCKS5 accept error: %v", err)
+					errCh <- err
+					return
+				}
+				logger.Verbosef("SOCKS5 accepted connection from %s", conn.RemoteAddr())
+				go func(conn net.Conn) {
+					defer conn.Close()
+					if err := server.ServeConn(conn); err != nil {
+						logger.Errorf("SOCKS5 ServeConn error for %s: %v", conn.RemoteAddr(), err)
+					} else {
+						logger.Verbosef("SOCKS5 ServeConn completed for %s", conn.RemoteAddr())
+					}
+				}(conn)
+			}
 		}
-		errCh <- nil // Or send the error if you want to propagate
 	}()
 
 	select {
 	case <-ctx.Done():
-		log.Printf("SOCKS5 server context canceled: %v", ctx.Err()) // Log cancellation
+		logger.Verbosef("SOCKS5 SpawnRoutine context done: %v", ctx.Err())
 		return ctx.Err()
 	case err := <-errCh:
 		if err != nil {
-			log.Printf("SOCKS5 server error: %v", err) // Log any error
+			logger.Errorf("SOCKS5 SpawnRoutine error: %v", err)
 		}
 		return err
 	}
