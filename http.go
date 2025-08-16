@@ -174,6 +174,11 @@ func (s *HTTPServer) ListenAndServe(ctx context.Context, network, addr string) e
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
+				// Suppress shutdown-related errors
+				if errors.Is(err, net.ErrClosed) || strings.Contains(err.Error(), "use of closed network connection") || errors.Is(err, context.Canceled) {
+					errCh <- nil
+					return
+				}
 				s.logger.Errorf("HTTP accept error: %v", err)
 				errCh <- err
 				return

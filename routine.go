@@ -190,6 +190,11 @@ func (config *Socks5Config) SpawnRoutine(ctx context.Context, vt *VirtualTun) er
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
+				// Suppress shutdown-related errors
+				if errors.Is(err, net.ErrClosed) || strings.Contains(err.Error(), "use of closed network connection") || errors.Is(err, context.Canceled) {
+					errCh <- nil
+					return
+				}
 				logger.Errorf("SOCKS5 accept error: %v", err)
 				errCh <- err
 				return
@@ -202,7 +207,11 @@ func (config *Socks5Config) SpawnRoutine(ctx context.Context, vt *VirtualTun) er
 					}
 				}(conn)
 				if err := server.ServeConn(conn); err != nil {
-					if !strings.Contains(err.Error(), "connection reset by peer") && err != io.EOF {
+					if !strings.Contains(err.Error(), "connection reset by peer") &&
+						err != io.EOF &&
+						!strings.Contains(err.Error(), "operation aborted") && // read/write aborts
+						!errors.Is(err, net.ErrClosed) && // Closed connections
+						!errors.Is(err, context.Canceled) { // Context shutdown
 						logger.Errorf("SOCKS5 ServeConn error for %s: %v", conn.RemoteAddr(), err)
 					}
 				}
