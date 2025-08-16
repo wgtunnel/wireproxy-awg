@@ -47,6 +47,7 @@ type VirtualTun struct {
 	Tnet      *netstack.Net
 	Dev       *device.Device
 	Logger    *device.Logger // Added for logging
+	Uapi      *os.File
 	SystemDNS bool
 	Conf      *DeviceConfig
 	// PingRecord stores the last time an IP was pinged
@@ -166,7 +167,6 @@ func (config *Socks5Config) SpawnRoutine(ctx context.Context, vt *VirtualTun) er
 
 	options := []socks5.Option{
 		socks5.WithDial(func(ctx context.Context, network, addr string) (net.Conn, error) {
-			logger.Verbosef("SOCKS5 WithDial: network %s, addr %s", network, addr)
 			conn, err := vt.Tnet.DialContext(ctx, network, addr)
 			if err != nil {
 				logger.Errorf("SOCKS5 WithDial failed: %v", err)
@@ -190,68 +190,64 @@ func (config *Socks5Config) SpawnRoutine(ctx context.Context, vt *VirtualTun) er
 
 	errCh := make(chan error, 1)
 	go func() {
-		defer listener.Close()
 		logger.Verbosef("SOCKS5 accept loop started")
 		for {
-			select {
-			case <-ctx.Done():
-				logger.Verbosef("SOCKS5 accept loop context done: %v", ctx.Err())
-				errCh <- ctx.Err()
+			conn, err := listener.Accept()
+			if err != nil {
+				logger.Errorf("SOCKS5 accept error: %v", err)
+				errCh <- err
 				return
-			default:
-				conn, err := listener.Accept()
-				if err != nil {
-					logger.Errorf("SOCKS5 accept error: %v", err)
-					errCh <- err
-					return
-				}
-				logger.Verbosef("SOCKS5 accepted connection from %s", conn.RemoteAddr())
-				go func(conn net.Conn) {
-					defer conn.Close()
-					if err := server.ServeConn(conn); err != nil {
-						logger.Errorf("SOCKS5 ServeConn error for %s: %v", conn.RemoteAddr(), err)
-					} else {
-						logger.Verbosef("SOCKS5 ServeConn completed for %s", conn.RemoteAddr())
+			}
+			go func(conn net.Conn) {
+				defer func(conn net.Conn) {
+					err := conn.Close()
+					if err != nil {
+						logger.Errorf("SOCKS5 network connect close failed: %v", err)
 					}
 				}(conn)
-			}
+				if err := server.ServeConn(conn); err != nil {
+					logger.Errorf("SOCKS5 ServeConn error for %s: %v", conn.RemoteAddr(), err)
+				}
+			}(conn)
 		}
 	}()
 
 	select {
-	case <-ctx.Done():
-		logger.Verbosef("SOCKS5 SpawnRoutine context done: %v", ctx.Err())
-		return ctx.Err()
 	case err := <-errCh:
+		listener.Close() // Clean up listener on natural error
 		if err != nil {
 			logger.Errorf("SOCKS5 SpawnRoutine error: %v", err)
 		}
 		return err
+	case <-ctx.Done():
+		logger.Verbosef("SOCKS5 SpawnRoutine context done: %v", ctx.Err())
+		if err := listener.Close(); err != nil { // Close to unblock Accept()
+			logger.Errorf("SOCKS5 listener close failed: %v", err)
+		}
+		<-errCh // Drain to wait for goroutine exit (ignores the triggered accept error)
+		return ctx.Err()
 	}
 }
 
-// SpawnRoutine spawns a http server.
+// SpawnRoutine spawns an http server.
 func (config *HTTPConfig) SpawnRoutine(ctx context.Context, vt *VirtualTun) error {
+	logger := vt.Logger
+	logger.Verbosef("HTTP SpawnRoutine started for bindAddress %s", config.BindAddress)
+
 	server := &HTTPServer{
-		config: config,
-		dial:   vt.Tnet.Dial,
-		auth:   CredentialValidator{config.Username, config.Password},
+		config:       config,
+		dial:         vt.Tnet.Dial,
+		auth:         CredentialValidator{config.Username, config.Password},
+		logger:       logger,
+		authRequired: config.Username != "" || config.Password != "",
 	}
-	if config.Username != "" || config.Password != "" {
-		server.authRequired = true
+	if server.authRequired {
+		logger.Verbosef("HTTP using authentication with username %s", config.Username)
+	} else {
+		logger.Verbosef("HTTP using no authentication")
 	}
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- server.ListenAndServe("tcp", config.BindAddress)
-	}()
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case err := <-errCh:
-		return err
-	}
+	return server.ListenAndServe(ctx, "tcp", config.BindAddress)
 }
 
 // Valid checks the authentication data in CredentialValidator and compare them
