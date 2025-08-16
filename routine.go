@@ -46,7 +46,7 @@ type CredentialValidator struct {
 type VirtualTun struct {
 	Tnet      *netstack.Net
 	Dev       *device.Device
-	Logger    *device.Logger // Added for logging
+	Logger    *device.Logger
 	Uapi      *os.File
 	SystemDNS bool
 	Conf      *DeviceConfig
@@ -68,7 +68,6 @@ type addressPort struct {
 // LookupAddr lookups a hostname.
 // DNS traffic may or may not be routed depending on VirtualTun's setting
 func (d *VirtualTun) LookupAddr(ctx context.Context, name string) ([]string, error) {
-	d.Logger.Verbosef("LookupAddr: name=%s, systemDNS=%v", name, d.SystemDNS)
 	if d.SystemDNS {
 		return net.DefaultResolver.LookupHost(ctx, name)
 	}
@@ -78,7 +77,6 @@ func (d *VirtualTun) LookupAddr(ctx context.Context, name string) ([]string, err
 // ResolveAddrWithContext resolves a hostname and returns an AddrPort.
 // DNS traffic may or may not be routed depending on VirtualTun's setting
 func (d *VirtualTun) ResolveAddrWithContext(ctx context.Context, name string) (*netip.Addr, error) {
-	d.Logger.Verbosef("ResolveAddrWithContext: name=%s", name)
 	addrs, err := d.LookupAddr(ctx, name)
 	if err != nil {
 		d.Logger.Errorf("LookupAddr failed: %v", err)
@@ -114,7 +112,6 @@ func (d *VirtualTun) ResolveAddrWithContext(ctx context.Context, name string) (*
 // Resolve resolves a hostname and returns an IP.
 // DNS traffic may or may not be routed depending on VirtualTun's setting
 func (d *VirtualTun) Resolve(ctx context.Context, name string) (context.Context, net.IP, error) {
-	d.Logger.Verbosef("Resolve: name=%s", name)
 	addr, err := d.ResolveAddrWithContext(ctx, name)
 	if err != nil {
 		d.Logger.Errorf("ResolveAddrWithContext failed: %v", err)
@@ -139,7 +136,6 @@ func parseAddressPort(endpoint string) (*addressPort, error) {
 }
 
 func (d *VirtualTun) resolveToAddrPort(endpoint *addressPort) (*netip.AddrPort, error) {
-	d.Logger.Verbosef("resolveToAddrPort: address=%s, port=%d", endpoint.address, endpoint.port)
 	addr, err := d.ResolveAddrWithContext(context.Background(), endpoint.address)
 	if err != nil {
 		d.Logger.Errorf("ResolveAddrWithContext failed: %v", err)
@@ -201,12 +197,14 @@ func (config *Socks5Config) SpawnRoutine(ctx context.Context, vt *VirtualTun) er
 			go func(conn net.Conn) {
 				defer func(conn net.Conn) {
 					err := conn.Close()
-					if err != nil {
+					if err != nil && !errors.Is(err, net.ErrClosed) {
 						logger.Errorf("SOCKS5 network connect close failed: %v", err)
 					}
 				}(conn)
 				if err := server.ServeConn(conn); err != nil {
-					logger.Errorf("SOCKS5 ServeConn error for %s: %v", conn.RemoteAddr(), err)
+					if !strings.Contains(err.Error(), "connection reset by peer") && err != io.EOF {
+						logger.Errorf("SOCKS5 ServeConn error for %s: %v", conn.RemoteAddr(), err)
+					}
 				}
 			}(conn)
 		}
@@ -431,7 +429,7 @@ func (conf *TCPServerTunnelConfig) SpawnRoutine(ctx context.Context, vt *Virtual
 			case <-ctx.Done():
 				return ctx.Err() // normal shutdown
 			default:
-				return err // unexpected error
+				return err
 			}
 		}
 		go tcpServerForward(vt, raddr, conn)

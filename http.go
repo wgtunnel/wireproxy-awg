@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -98,7 +99,9 @@ func (s *HTTPServer) serve(conn net.Conn) {
 	var rd = bufio.NewReader(conn)
 	req, err := http.ReadRequest(rd)
 	if err != nil {
-		s.logger.Errorf("HTTP read request failed: %v", err)
+		if !strings.Contains(err.Error(), "connection reset by peer") && err != io.EOF {
+			s.logger.Errorf("HTTP read request failed: %v", err)
+		}
 		return
 	}
 
@@ -125,7 +128,9 @@ func (s *HTTPServer) serve(conn net.Conn) {
 		return
 	}
 	if err != nil {
-		s.logger.Errorf("HTTP handle failed: %v", err)
+		if !strings.Contains(err.Error(), "connection reset by peer") && err != io.EOF {
+			s.logger.Errorf("HTTP handle failed: %v", err)
+		}
 		return
 	}
 	if peer == nil {
@@ -137,14 +142,20 @@ func (s *HTTPServer) serve(conn net.Conn) {
 		defer conn.Close()
 		defer peer.Close()
 
-		_, _ = io.Copy(conn, peer)
+		_, err := io.Copy(conn, peer)
+		if err != nil && !strings.Contains(err.Error(), "connection reset by peer") && err != io.EOF {
+			s.logger.Errorf("HTTP io.Copy (peer to conn) error: %v", err)
+		}
 	}()
 
 	go func() {
 		defer conn.Close()
 		defer peer.Close()
 
-		_, _ = io.Copy(peer, conn)
+		_, err := io.Copy(peer, conn)
+		if err != nil && !strings.Contains(err.Error(), "connection reset by peer") && err != io.EOF {
+			s.logger.Errorf("HTTP io.Copy (conn to peer) error: %v", err)
+		}
 	}()
 }
 
@@ -169,7 +180,7 @@ func (s *HTTPServer) ListenAndServe(ctx context.Context, network, addr string) e
 			}
 			go func(conn net.Conn) {
 				defer func() {
-					if err := conn.Close(); err != nil {
+					if err := conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 						s.logger.Errorf("HTTP connection close failed: %v", err)
 					}
 				}()
