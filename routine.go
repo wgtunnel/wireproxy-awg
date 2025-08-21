@@ -208,15 +208,35 @@ func (config *Socks5Config) SpawnRoutine(ctx context.Context, vt *VirtualTun) er
 		authMethods = append(authMethods, socks5.NoAuthAuthenticator{})
 	}
 
+	r := &TUNResolver{vt: vt}
 	options := []socks5.Option{
 		socks5.WithDial(func(ctx context.Context, network, addr string) (net.Conn, error) {
-			conn, err := vt.Tnet.DialContext(ctx, network, addr)
+			host, port, err := net.SplitHostPort(addr)
 			if err != nil {
-				logger.Errorf("SOCKS5 WithDial failed: %v", err)
+				return nil, err
 			}
-			return conn, err
+
+			ip := net.ParseIP(host)
+			if ip == nil {
+				// Domain name, resolve using TUNResolver
+				_, resolvedIP, err := r.Resolve(ctx, host)
+				if err != nil {
+					return nil, err
+				}
+				addr = net.JoinHostPort(resolvedIP.String(), port)
+			} else {
+				// Already an IP — optionally prefer IPv4
+				if ip.To4() == nil {
+					// It's IPv6 — try to resolve an IPv4 if available
+					_, ipv4Addr, err := r.Resolve(ctx, host)
+					if err == nil && ipv4Addr.To4() != nil {
+						addr = net.JoinHostPort(ipv4Addr.String(), port)
+					}
+				}
+			}
+			return vt.Tnet.DialContext(ctx, network, addr)
 		}),
-		// Removed WithResolver(vt) to forward hostnames to Tnet for resolution through the tunnel
+		socks5.WithResolver(r),
 		socks5.WithAuthMethods(authMethods),
 		socks5.WithBufferPool(bufferpool.NewPool(256 * 1024))}
 
@@ -230,55 +250,40 @@ func (config *Socks5Config) SpawnRoutine(ctx context.Context, vt *VirtualTun) er
 	}
 	logger.Verbosef("SOCKS5 listener bound successfully on %s", config.BindAddress)
 
-	errCh := make(chan error, 1)
 	go func() {
-		logger.Verbosef("SOCKS5 accept loop started")
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				// Suppress shutdown-related errors
-				if errors.Is(err, net.ErrClosed) || strings.Contains(err.Error(), "use of closed network connection") || errors.Is(err, context.Canceled) {
-					errCh <- nil
-					return
-				}
-				logger.Errorf("SOCKS5 accept error: %v", err)
-				errCh <- err
-				return
-			}
-			go func(conn net.Conn) {
-				defer func(conn net.Conn) {
-					err := conn.Close()
-					if err != nil && !errors.Is(err, net.ErrClosed) {
-						logger.Errorf("SOCKS5 network connect close failed: %v", err)
-					}
-				}(conn)
-				if err := server.ServeConn(conn); err != nil {
-					if !strings.Contains(err.Error(), "connection reset by peer") &&
-						err != io.EOF &&
-						!strings.Contains(err.Error(), "operation aborted") && // read/write aborts
-						!errors.Is(err, net.ErrClosed) && // Closed connections
-						!errors.Is(err, context.Canceled) { // Context shutdown
-						logger.Errorf("SOCKS5 ServeConn error for %s: %v", conn.RemoteAddr(), err)
-					}
-				}
-			}(conn)
-		}
+		<-ctx.Done()
+		listener.Close()
+		logger.Verbosef("SOCKS5 listener closed on context done")
 	}()
 
-	select {
-	case err := <-errCh:
-		listener.Close() // Clean up listener on natural error
+	for {
+		conn, err := listener.Accept()
 		if err != nil {
-			logger.Errorf("SOCKS5 SpawnRoutine error: %v", err)
+			var opErr *net.OpError
+			if errors.As(err, &opErr) && errors.Is(opErr.Err, net.ErrClosed) {
+				logger.Verbosef("SOCKS5 accept loop exited gracefully on listener close")
+				return nil // Graceful shutdown
+			}
+			logger.Errorf("SOCKS5 accept error: %v", err)
+			return err
 		}
-		return err
-	case <-ctx.Done():
-		logger.Verbosef("SOCKS5 SpawnRoutine context done: %v", ctx.Err())
-		if err := listener.Close(); err != nil { // Close to unblock Accept()
-			logger.Errorf("SOCKS5 listener close failed: %v", err)
-		}
-		<-errCh // Drain to wait for goroutine exit (ignores the triggered accept error)
-		return ctx.Err()
+		go func(conn net.Conn) {
+			defer func(conn net.Conn) {
+				err := conn.Close()
+				if err != nil && !errors.Is(err, net.ErrClosed) {
+					logger.Errorf("SOCKS5 network connect close failed: %v", err)
+				}
+			}(conn)
+			if err := server.ServeConn(conn); err != nil {
+				if !strings.Contains(err.Error(), "connection reset by peer") &&
+					err != io.EOF &&
+					!strings.Contains(err.Error(), "operation aborted") && // read/write aborts
+					!errors.Is(err, net.ErrClosed) && // Closed connections
+					!errors.Is(err, context.Canceled) { // Context shutdown
+					logger.Errorf("SOCKS5 ServeConn error for %s: %v", conn.RemoteAddr(), err)
+				}
+			}
+		}(conn)
 	}
 }
 

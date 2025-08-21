@@ -47,15 +47,17 @@ type ASecConfigType struct {
 
 // DeviceConfig contains the information to initiate a wireguard connection
 type DeviceConfig struct {
-	SecretKey          string
-	Endpoint           []netip.Addr
-	Peers              []PeerConfig
-	DNS                []netip.Addr
-	MTU                int
-	ListenPort         *int
-	CheckAlive         []netip.Addr
-	CheckAliveInterval int
-	ASecConfig         *ASecConfigType
+	SecretKey             string
+	Endpoint              []netip.Addr
+	Peers                 []PeerConfig
+	DNS                   []netip.Addr
+	MTU                   int
+	ListenPort            *int
+	CheckAlive            []netip.Addr
+	DomainBlockingEnabled bool
+	BlockedDomains        []string
+	CheckAliveInterval    int
+	ASecConfig            *ASecConfigType
 }
 
 // DeviceSetting contains the parameters for setting up a tun interface
@@ -190,6 +192,23 @@ func parseNetIP(section *ini.Section, keyName string) ([]netip.Addr, error) {
 		ips = append(ips, ip)
 	}
 	return ips, nil
+}
+
+func parseStrings(section *ini.Section, keyName string) ([]string, error) {
+	key, err := parseString(section, keyName)
+	if err != nil {
+		if strings.Contains(err.Error(), "should not be empty") {
+			return []string{}, nil
+		}
+		return nil, err
+	}
+
+	keys := strings.Split(key, ",")
+	var result []string
+	for _, key := range keys {
+		result = append(result, strings.TrimSpace(key))
+	}
+	return result, nil
 }
 
 func parseStringList(section *ini.Section, keyName string) ([]string, error) {
@@ -337,6 +356,20 @@ func ParseInterface(cfg *ini.File, device *DeviceConfig) error {
 	}
 	device.CheckAlive = checkAlive
 
+	if sectionKey, err := section.GetKey("DomainBlockingEnabled"); err == nil {
+		value, err := sectionKey.Bool()
+		if err != nil {
+			return err
+		}
+		device.DomainBlockingEnabled = value
+	}
+
+	blockedDomains, err := parseStrings(section, "BlockedDomains")
+	if err != nil {
+		return err
+	}
+	device.BlockedDomains = blockedDomains
+
 	device.CheckAliveInterval = 5
 	if sectionKey, err := section.GetKey("CheckAliveInterval"); err == nil {
 		value, err := sectionKey.Int()
@@ -346,7 +379,6 @@ func ParseInterface(cfg *ini.File, device *DeviceConfig) error {
 		if len(checkAlive) == 0 {
 			return errors.New("CheckAliveInterval is only valid when CheckAlive is set")
 		}
-
 		device.CheckAliveInterval = value
 	}
 
