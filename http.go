@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/amnezia-vpn/amneziawg-go/device"
 )
@@ -138,25 +139,28 @@ func (s *HTTPServer) serve(conn net.Conn) {
 		return
 	}
 
-	go func() {
-		defer conn.Close()
-		defer peer.Close()
+	var wg sync.WaitGroup
+	wg.Add(2)
 
+	go func() {
+		defer wg.Done()
 		_, err := io.Copy(conn, peer)
-		if err != nil && !strings.Contains(err.Error(), "connection reset by peer") && err != io.EOF {
+		if err != nil && !strings.Contains(err.Error(), "connection reset by peer") && !strings.Contains(err.Error(), "operation aborted") && err != io.EOF {
 			s.logger.Errorf("HTTP io.Copy (peer to conn) error: %v", err)
 		}
 	}()
 
 	go func() {
-		defer conn.Close()
-		defer peer.Close()
-
+		defer wg.Done()
 		_, err := io.Copy(peer, conn)
-		if err != nil && !strings.Contains(err.Error(), "connection reset by peer") && err != io.EOF {
+		if err != nil && !strings.Contains(err.Error(), "connection reset by peer") && !strings.Contains(err.Error(), "operation aborted") && err != io.EOF {
 			s.logger.Errorf("HTTP io.Copy (conn to peer) error: %v", err)
 		}
 	}()
+
+	wg.Wait()
+	conn.Close()
+	peer.Close()
 }
 
 // ListenAndServe is used to create a listener and serve on it
