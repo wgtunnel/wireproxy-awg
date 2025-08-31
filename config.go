@@ -394,14 +394,18 @@ func ParseInterface(cfg *ini.File, device *DeviceConfig) error {
 func ParseASecConfig(section *ini.Section) (*ASecConfigType, error) {
 	var aSecConfig *ASecConfigType
 
+	initializeASecConfig := func() {
+		if aSecConfig == nil {
+			aSecConfig = &ASecConfigType{}
+		}
+	}
+
 	if sectionKey, err := section.GetKey("Jc"); err == nil {
 		value, err := sectionKey.Int()
 		if err != nil {
 			return nil, err
 		}
-		if aSecConfig == nil {
-			aSecConfig = &ASecConfigType{}
-		}
+		initializeASecConfig()
 		aSecConfig.junkPacketCount = value
 	}
 
@@ -410,9 +414,7 @@ func ParseASecConfig(section *ini.Section) (*ASecConfigType, error) {
 		if err != nil {
 			return nil, err
 		}
-		if aSecConfig == nil {
-			aSecConfig = &ASecConfigType{}
-		}
+		initializeASecConfig()
 		aSecConfig.junkPacketMinSize = value
 	}
 
@@ -421,9 +423,7 @@ func ParseASecConfig(section *ini.Section) (*ASecConfigType, error) {
 		if err != nil {
 			return nil, err
 		}
-		if aSecConfig == nil {
-			aSecConfig = &ASecConfigType{}
-		}
+		initializeASecConfig()
 		aSecConfig.junkPacketMaxSize = value
 	}
 
@@ -432,9 +432,7 @@ func ParseASecConfig(section *ini.Section) (*ASecConfigType, error) {
 		if err != nil {
 			return nil, err
 		}
-		if aSecConfig == nil {
-			aSecConfig = &ASecConfigType{}
-		}
+		initializeASecConfig()
 		aSecConfig.initPacketJunkSize = value
 	}
 
@@ -443,9 +441,7 @@ func ParseASecConfig(section *ini.Section) (*ASecConfigType, error) {
 		if err != nil {
 			return nil, err
 		}
-		if aSecConfig == nil {
-			aSecConfig = &ASecConfigType{}
-		}
+		initializeASecConfig()
 		aSecConfig.responsePacketJunkSize = value
 	}
 
@@ -454,9 +450,7 @@ func ParseASecConfig(section *ini.Section) (*ASecConfigType, error) {
 		if err != nil {
 			return nil, err
 		}
-		if aSecConfig == nil {
-			aSecConfig = &ASecConfigType{}
-		}
+		initializeASecConfig()
 		aSecConfig.initPacketMagicHeader = uint32(value)
 	}
 
@@ -465,9 +459,7 @@ func ParseASecConfig(section *ini.Section) (*ASecConfigType, error) {
 		if err != nil {
 			return nil, err
 		}
-		if aSecConfig == nil {
-			aSecConfig = &ASecConfigType{}
-		}
+		initializeASecConfig()
 		aSecConfig.responsePacketMagicHeader = uint32(value)
 	}
 
@@ -476,9 +468,7 @@ func ParseASecConfig(section *ini.Section) (*ASecConfigType, error) {
 		if err != nil {
 			return nil, err
 		}
-		if aSecConfig == nil {
-			aSecConfig = &ASecConfigType{}
-		}
+		initializeASecConfig()
 		aSecConfig.underloadPacketMagicHeader = uint32(value)
 	}
 
@@ -487,73 +477,49 @@ func ParseASecConfig(section *ini.Section) (*ASecConfigType, error) {
 		if err != nil {
 			return nil, err
 		}
-		if aSecConfig == nil {
-			aSecConfig = &ASecConfigType{}
-		}
+		initializeASecConfig()
 		aSecConfig.transportPacketMagicHeader = uint32(value)
 	}
 
 	if sectionKey, err := section.GetKey("I1"); err == nil {
 		value := sectionKey.String()
-		if aSecConfig == nil {
-			aSecConfig = &ASecConfigType{}
-		}
+		initializeASecConfig()
 		aSecConfig.i1 = &value
 	}
-
 	if sectionKey, err := section.GetKey("I2"); err == nil {
 		value := sectionKey.String()
-		if aSecConfig == nil {
-			aSecConfig = &ASecConfigType{}
-		}
+		initializeASecConfig()
 		aSecConfig.i2 = &value
 	}
-
 	if sectionKey, err := section.GetKey("I3"); err == nil {
 		value := sectionKey.String()
-		if aSecConfig == nil {
-			aSecConfig = &ASecConfigType{}
-		}
+		initializeASecConfig()
 		aSecConfig.i3 = &value
 	}
-
 	if sectionKey, err := section.GetKey("I4"); err == nil {
 		value := sectionKey.String()
-		if aSecConfig == nil {
-			aSecConfig = &ASecConfigType{}
-		}
+		initializeASecConfig()
 		aSecConfig.i4 = &value
 	}
-
 	if sectionKey, err := section.GetKey("I5"); err == nil {
 		value := sectionKey.String()
-		if aSecConfig == nil {
-			aSecConfig = &ASecConfigType{}
-		}
+		initializeASecConfig()
 		aSecConfig.i5 = &value
 	}
 
 	if sectionKey, err := section.GetKey("J1"); err == nil {
 		value := sectionKey.String()
-		if aSecConfig == nil {
-			aSecConfig = &ASecConfigType{}
-		}
+		initializeASecConfig()
 		aSecConfig.j1 = &value
 	}
-
 	if sectionKey, err := section.GetKey("J2"); err == nil {
 		value := sectionKey.String()
-		if aSecConfig == nil {
-			aSecConfig = &ASecConfigType{}
-		}
+		initializeASecConfig()
 		aSecConfig.j2 = &value
 	}
-
 	if sectionKey, err := section.GetKey("J3"); err == nil {
 		value := sectionKey.String()
-		if aSecConfig == nil {
-			aSecConfig = &ASecConfigType{}
-		}
+		initializeASecConfig()
 		aSecConfig.j3 = &value
 	}
 
@@ -562,9 +528,7 @@ func ParseASecConfig(section *ini.Section) (*ASecConfigType, error) {
 		if err != nil {
 			return nil, err
 		}
-		if aSecConfig == nil {
-			aSecConfig = &ASecConfigType{}
-		}
+		initializeASecConfig()
 		aSecConfig.itime = &value
 	}
 
@@ -579,35 +543,64 @@ func ValidateASecConfig(config *ASecConfigType) error {
 	if config == nil {
 		return nil
 	}
-	jc := config.junkPacketCount
-	jmin := config.junkPacketMinSize
-	jmax := config.junkPacketMaxSize
-	if jc < 1 || jc > 128 {
-		return errors.New("value of the Jc field must be within the range of 1 to 128")
+	if config.junkPacketCount < 0 || config.junkPacketCount > 10 {
+		return errors.New("value of the Jc field must be within the range of 0 to 10")
 	}
-	if jmin > jmax {
+	if config.junkPacketMinSize < 0 || config.junkPacketMinSize > 1024 {
+		return errors.New("value of the Jmin field must be within the range of 0 to 1024")
+	}
+	if config.junkPacketMaxSize < 0 || config.junkPacketMaxSize > 1024 {
+		return errors.New("value of the Jmax field must be within the range of 0 to 1024")
+	}
+	if config.junkPacketCount > 0 && config.junkPacketMinSize > config.junkPacketMaxSize {
 		return errors.New("value of the Jmin field must be less than or equal to Jmax field value")
 	}
-	if jmax > 1280 {
-		return errors.New("value of the Jmax field must be less than or equal 1280")
+	if config.initPacketJunkSize < 0 || config.initPacketJunkSize > 64 {
+		return errors.New("value of the S1 field must be within the range of 0 to 64")
+	}
+	if config.responsePacketJunkSize < 0 || config.responsePacketJunkSize > 64 {
+		return errors.New("value of the S2 field must be within the range of 0 to 64")
 	}
 
-	s1 := config.initPacketJunkSize
-	s2 := config.responsePacketJunkSize
+	// Check S1 + 148 ≠ S2 + 92
 	const messageInitiationSize = 148
 	const messageResponseSize = 92
-	if messageInitiationSize+s1 == messageResponseSize+s2 {
+	if messageInitiationSize+config.initPacketJunkSize == messageResponseSize+config.responsePacketJunkSize {
 		return errors.New(
 			"value of the field S1 + message initiation size (148) must not equal S2 + message response size (92)",
 		)
 	}
 
-	h1 := config.initPacketMagicHeader
-	h2 := config.responsePacketMagicHeader
-	h3 := config.underloadPacketMagicHeader
-	h4 := config.transportPacketMagicHeader
-	if (h1 == h2) || (h1 == h3) || (h1 == h4) || (h2 == h3) || (h2 == h4) || (h3 == h4) {
-		return errors.New("values of the H1-H4 fields must be unique")
+	// Validate H1-H4 uniqueness (allow unset/default to 0, but check if any are set)
+	headers := []uint32{
+		config.initPacketMagicHeader,
+		config.responsePacketMagicHeader,
+		config.underloadPacketMagicHeader,
+		config.transportPacketMagicHeader,
+	}
+	seen := make(map[uint32]bool)
+	anyHeaderSet := false
+	for i, h := range headers {
+		if h != 0 { // Only check non-zero (set) headers
+			anyHeaderSet = true
+			if seen[h] {
+				return fmt.Errorf("values of the H1-H4 fields must be unique; H%d conflicts", i+1)
+			}
+			seen[h] = true
+		}
+	}
+	// If any header is set, all should be set to avoid conflicts with default 0
+	if anyHeaderSet {
+		for i, h := range headers {
+			if h == 0 {
+				return fmt.Errorf("H%d is unset (0) while other headers are set; all H1-H4 must be explicitly set if any are used", i+1)
+			}
+		}
+	}
+
+	// Validate iTime (non-negative integer)
+	if config.itime != nil && *config.itime < 0 {
+		return errors.New("value of the iTime field must be non-negative")
 	}
 
 	return nil
