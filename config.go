@@ -405,6 +405,9 @@ func ParseASecConfig(section *ini.Section) (*ASecConfigType, error) {
 		if err != nil {
 			return nil, err
 		}
+		if value < 0 || value > 200 {
+			return nil, fmt.Errorf("value of the Jc field must be within the range of 0 to 200")
+		}
 		initializeASecConfig()
 		aSecConfig.junkPacketCount = value
 	}
@@ -413,6 +416,9 @@ func ParseASecConfig(section *ini.Section) (*ASecConfigType, error) {
 		value, err := sectionKey.Int()
 		if err != nil {
 			return nil, err
+		}
+		if value < 0 || value > 1280 {
+			return nil, fmt.Errorf("value of the Jmin field must be within the range of 0 to 1280")
 		}
 		initializeASecConfig()
 		aSecConfig.junkPacketMinSize = value
@@ -423,6 +429,9 @@ func ParseASecConfig(section *ini.Section) (*ASecConfigType, error) {
 		if err != nil {
 			return nil, err
 		}
+		if value < 0 || value > 1280 {
+			return nil, fmt.Errorf("value of the Jmax field must be within the range of 0 to 1280")
+		}
 		initializeASecConfig()
 		aSecConfig.junkPacketMaxSize = value
 	}
@@ -431,6 +440,9 @@ func ParseASecConfig(section *ini.Section) (*ASecConfigType, error) {
 		value, err := sectionKey.Int()
 		if err != nil {
 			return nil, err
+		}
+		if value < 0 || value > 1280 {
+			return nil, fmt.Errorf("value of the S1 field must be within the range of 0 to 1280")
 		}
 		initializeASecConfig()
 		aSecConfig.initPacketJunkSize = value
@@ -441,44 +453,59 @@ func ParseASecConfig(section *ini.Section) (*ASecConfigType, error) {
 		if err != nil {
 			return nil, err
 		}
+		if value < 0 || value > 1280 {
+			return nil, fmt.Errorf("value of the S2 field must be within the range of 0 to 1280")
+		}
 		initializeASecConfig()
 		aSecConfig.responsePacketJunkSize = value
 	}
 
 	if sectionKey, err := section.GetKey("H1"); err == nil {
-		value, err := sectionKey.Uint()
+		value64, err := sectionKey.Uint64()
 		if err != nil {
 			return nil, err
 		}
+		if value64 < 1 || value64 > 4294967295 {
+			return nil, fmt.Errorf("value of the H1 field must be within the range of 1 to 4294967295")
+		}
 		initializeASecConfig()
-		aSecConfig.initPacketMagicHeader = uint32(value)
+		aSecConfig.initPacketMagicHeader = uint32(value64)
 	}
 
 	if sectionKey, err := section.GetKey("H2"); err == nil {
-		value, err := sectionKey.Uint()
+		value64, err := sectionKey.Uint64()
 		if err != nil {
 			return nil, err
 		}
+		if value64 < 1 || value64 > 4294967295 {
+			return nil, fmt.Errorf("value of the H2 field must be within the range of 1 to 4294967295")
+		}
 		initializeASecConfig()
-		aSecConfig.responsePacketMagicHeader = uint32(value)
+		aSecConfig.responsePacketMagicHeader = uint32(value64)
 	}
 
 	if sectionKey, err := section.GetKey("H3"); err == nil {
-		value, err := sectionKey.Uint()
+		value64, err := sectionKey.Uint64()
 		if err != nil {
 			return nil, err
 		}
+		if value64 < 1 || value64 > 4294967295 {
+			return nil, fmt.Errorf("value of the H3 field must be within the range of 1 to 4294967295")
+		}
 		initializeASecConfig()
-		aSecConfig.underloadPacketMagicHeader = uint32(value)
+		aSecConfig.underloadPacketMagicHeader = uint32(value64)
 	}
 
 	if sectionKey, err := section.GetKey("H4"); err == nil {
-		value, err := sectionKey.Uint()
+		value64, err := sectionKey.Uint64()
 		if err != nil {
 			return nil, err
 		}
+		if value64 < 1 || value64 > 4294967295 {
+			return nil, fmt.Errorf("value of the H4 field must be within the range of 1 to 4294967295")
+		}
 		initializeASecConfig()
-		aSecConfig.transportPacketMagicHeader = uint32(value)
+		aSecConfig.transportPacketMagicHeader = uint32(value64)
 	}
 
 	if sectionKey, err := section.GetKey("I1"); err == nil {
@@ -528,6 +555,9 @@ func ParseASecConfig(section *ini.Section) (*ASecConfigType, error) {
 		if err != nil {
 			return nil, err
 		}
+		if value < 0 {
+			return nil, fmt.Errorf("value of the ITime field must be non-negative")
+		}
 		initializeASecConfig()
 		aSecConfig.itime = &value
 	}
@@ -543,23 +573,8 @@ func ValidateASecConfig(config *ASecConfigType) error {
 	if config == nil {
 		return nil
 	}
-	if config.junkPacketCount < 0 || config.junkPacketCount > 10 {
-		return errors.New("value of the Jc field must be within the range of 0 to 10")
-	}
-	if config.junkPacketMinSize < 0 || config.junkPacketMinSize > 1024 {
-		return errors.New("value of the Jmin field must be within the range of 0 to 1024")
-	}
-	if config.junkPacketMaxSize < 0 || config.junkPacketMaxSize > 1024 {
-		return errors.New("value of the Jmax field must be within the range of 0 to 1024")
-	}
 	if config.junkPacketCount > 0 && config.junkPacketMinSize > config.junkPacketMaxSize {
 		return errors.New("value of the Jmin field must be less than or equal to Jmax field value")
-	}
-	if config.initPacketJunkSize < 0 || config.initPacketJunkSize > 64 {
-		return errors.New("value of the S1 field must be within the range of 0 to 64")
-	}
-	if config.responsePacketJunkSize < 0 || config.responsePacketJunkSize > 64 {
-		return errors.New("value of the S2 field must be within the range of 0 to 64")
 	}
 
 	// Check S1 + 148 ≠ S2 + 92
@@ -596,11 +611,6 @@ func ValidateASecConfig(config *ASecConfigType) error {
 				return fmt.Errorf("H%d is unset (0) while other headers are set; all H1-H4 must be explicitly set if any are used", i+1)
 			}
 		}
-	}
-
-	// Validate iTime (non-negative integer)
-	if config.itime != nil && *config.itime < 0 {
-		return errors.New("value of the iTime field must be non-negative")
 	}
 
 	return nil
