@@ -809,7 +809,7 @@ func Parse(cfg *ini.File) (*Configuration, error) {
 }
 
 // CreateIPCRequest serialize the config into an IPC request and DeviceSetting
-func CreateIPCRequest(conf *DeviceConfig) (*DeviceSetting, error) {
+func CreateIPCRequest(conf *DeviceConfig, isUpdate bool) (*DeviceSetting, error) {
 	var request bytes.Buffer
 
 	request.WriteString(fmt.Sprintf("private_key=%s\n", conf.SecretKey))
@@ -864,6 +864,11 @@ func CreateIPCRequest(conf *DeviceConfig) (*DeviceSetting, error) {
 		request.WriteString(aSecBuilder.String())
 	}
 
+	// Crucial for updates: Replace entire peer list to avoid duplicates
+	if isUpdate {
+		request.WriteString("replace_peers=true\n")
+	}
+
 	for _, peer := range conf.Peers {
 		request.WriteString(fmt.Sprintf(heredoc.Doc(`
 				public_key=%s
@@ -876,6 +881,8 @@ func CreateIPCRequest(conf *DeviceConfig) (*DeviceSetting, error) {
 			request.WriteString(fmt.Sprintf("endpoint=%s\n", *peer.Endpoint))
 		}
 
+		// For allowed_ips: Always replace to avoid duplicate routes
+		request.WriteString("replace_allowed_ips=true\n")
 		if len(peer.AllowedIPs) > 0 {
 			for _, ip := range peer.AllowedIPs {
 				request.WriteString(fmt.Sprintf("allowed_ip=%s\n", ip.String()))
