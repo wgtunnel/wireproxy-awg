@@ -864,7 +864,6 @@ func CreateIPCRequest(conf *DeviceConfig, isUpdate bool) (*DeviceSetting, error)
 		request.WriteString(aSecBuilder.String())
 	}
 
-	// Crucial for updates: Replace entire peer list to avoid duplicates
 	if isUpdate {
 		request.WriteString("replace_peers=true\n")
 	}
@@ -881,7 +880,6 @@ func CreateIPCRequest(conf *DeviceConfig, isUpdate bool) (*DeviceSetting, error)
 			request.WriteString(fmt.Sprintf("endpoint=%s\n", *peer.Endpoint))
 		}
 
-		// For allowed_ips: Always replace to avoid duplicate routes
 		request.WriteString("replace_allowed_ips=true\n")
 		if len(peer.AllowedIPs) > 0 {
 			for _, ip := range peer.AllowedIPs {
@@ -892,6 +890,41 @@ func CreateIPCRequest(conf *DeviceConfig, isUpdate bool) (*DeviceSetting, error)
 				allowed_ip=0.0.0.0/0
 				allowed_ip=::/0
 			`))
+		}
+	}
+
+	setting := &DeviceSetting{IpcRequest: request.String(), DNS: conf.DNS, DeviceAddr: conf.Endpoint, MTU: conf.MTU}
+	return setting, nil
+}
+
+// CreatePeerIPCRequest builds a UAPI string for updating peers only, based on the provided DeviceConfig.
+func CreatePeerIPCRequest(conf *DeviceConfig) (*DeviceSetting, error) {
+	var request bytes.Buffer
+
+	request.WriteString("replace_peers=true\n")
+
+	for _, peer := range conf.Peers {
+		request.WriteString(fmt.Sprintf("public_key=%s\n", peer.PublicKey))
+		request.WriteString("update_only=true\n")
+
+		request.WriteString(fmt.Sprintf("persistent_keepalive_interval=%d\n", peer.KeepAlive))
+		request.WriteString(fmt.Sprintf("preshared_key=%s\n", peer.PreSharedKey))
+
+		if peer.Endpoint != nil {
+			request.WriteString(fmt.Sprintf("endpoint=%s\n", *peer.Endpoint))
+		}
+
+		request.WriteString("replace_allowed_ips=true\n")
+
+		if len(peer.AllowedIPs) > 0 {
+			for _, ip := range peer.AllowedIPs {
+				request.WriteString(fmt.Sprintf("allowed_ip=%s\n", ip.String()))
+			}
+		} else {
+			request.WriteString(heredoc.Doc(`
+                allowed_ip=0.0.0.0/0
+                allowed_ip=::/0
+            `))
 		}
 	}
 
