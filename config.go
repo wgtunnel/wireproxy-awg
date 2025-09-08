@@ -901,7 +901,7 @@ func CreateIPCRequest(conf *DeviceConfig, isUpdate bool) (*DeviceSetting, error)
 func CreatePeerIPCRequest(conf *DeviceConfig) (*DeviceSetting, error) {
 	var request bytes.Buffer
 
-	request.WriteString("replace_peers=true\n")
+	//request.WriteString("replace_peers=true\n")
 
 	for _, peer := range conf.Peers {
 		request.WriteString(fmt.Sprintf("public_key=%s\n", peer.PublicKey))
