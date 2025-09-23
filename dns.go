@@ -23,7 +23,7 @@ func (r *TUNResolver) Resolve(ctx context.Context, name string) (context.Context
 		return ctx, nil, errors.New("no DNS servers configured")
 	}
 
-	dnsServer := r.vt.Conf.DNS[0].String()
+	dnsServer := r.vt.Conf.DNS[0]
 	if !strings.Contains(dnsServer, ":") {
 		dnsServer += ":53"
 	}

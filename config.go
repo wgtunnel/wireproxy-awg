@@ -50,7 +50,7 @@ type DeviceConfig struct {
 	SecretKey             string
 	Endpoint              []netip.Addr
 	Peers                 []PeerConfig
-	DNS                   []netip.Addr
+	DNS                   []string
 	MTU                   int
 	ListenPort            *int
 	CheckAlive            []netip.Addr
@@ -63,7 +63,7 @@ type DeviceConfig struct {
 // DeviceSetting contains the parameters for setting up a tun interface
 type DeviceSetting struct {
 	IpcRequest string
-	DNS        []netip.Addr
+	DNS        []string
 	DeviceAddr []netip.Addr
 	MTU        int
 }
@@ -192,6 +192,27 @@ func parseNetIP(section *ini.Section, keyName string) ([]netip.Addr, error) {
 		ips = append(ips, ip)
 	}
 	return ips, nil
+}
+
+func parseDNS(section *ini.Section, keyName string) ([]string, error) {
+	key, err := parseString(section, keyName)
+	if err != nil {
+		if strings.Contains(err.Error(), "should not be empty") {
+			return []string{}, nil
+		}
+		return nil, err
+	}
+
+	keys := strings.Split(key, ",")
+	var dns = make([]string, 0, len(keys))
+	for _, str := range keys {
+		str = strings.TrimSpace(str)
+		if len(str) == 0 {
+			continue
+		}
+		dns = append(dns, str)
+	}
+	return dns, nil
 }
 
 func parseStrings(section *ini.Section, keyName string) ([]string, error) {
@@ -328,7 +349,7 @@ func ParseInterface(cfg *ini.File, device *DeviceConfig) error {
 	}
 	device.SecretKey = privKey
 
-	dns, err := parseNetIP(section, "DNS")
+	dns, err := parseDNS(section, "DNS")
 	if err != nil {
 		return err
 	}
