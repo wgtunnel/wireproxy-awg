@@ -23,29 +23,44 @@ func (r *TUNResolver) Resolve(ctx context.Context, name string) (context.Context
 		return ctx, nil, errors.New("no DNS servers configured")
 	}
 
-	dnsServer := r.vt.Conf.DNS[0]
+	dnsServer := r.vt.Conf.DNS[0].String()
 	if !strings.Contains(dnsServer, ":") {
 		dnsServer += ":53"
 	}
 
-	// Ensure the domain name ends with a dot
+	// Normalize: ensure trailing dot for absolute queries
+	originalName := name
 	if !strings.HasSuffix(name, ".") {
 		name += "."
 	}
 
-	// Try A record first (IPv4)
-	ip, err := r.queryDNS(ctx, dnsServer, name, dns.TypeA)
-	if err == nil && ip != nil {
-		return ctx, ip, nil
+	// List of names to try: original + appended search domains if unqualified
+	var namesToQuery []string
+	if strings.Count(strings.TrimSuffix(originalName, "."), ".") == 0 && len(r.vt.Conf.SearchDomains) > 0 {
+		for _, domain := range r.vt.Conf.SearchDomains {
+			full := strings.TrimSuffix(originalName, ".") + "." + strings.TrimPrefix(domain, ".") + "."
+			namesToQuery = append(namesToQuery, full)
+		}
+	}
+	namesToQuery = append(namesToQuery, name) // Fallback to original
+
+	// Prefer A (IPv4)
+	for _, qname := range namesToQuery {
+		ip, err := r.queryDNS(ctx, dnsServer, qname, dns.TypeA)
+		if err == nil && ip != nil {
+			return ctx, ip, nil
+		}
 	}
 
-	// If no IPv4 address found, try AAAA (IPv6)
-	ip, err = r.queryDNS(ctx, dnsServer, name, dns.TypeAAAA)
-	if err == nil && ip != nil {
-		return ctx, ip, nil
+	// Fallback to AAAA (IPv6)
+	for _, qname := range namesToQuery {
+		ip, err := r.queryDNS(ctx, dnsServer, qname, dns.TypeAAAA)
+		if err == nil && ip != nil {
+			return ctx, ip, nil
+		}
 	}
 
-	return ctx, nil, errors.New("no A or AAAA records found")
+	return ctx, nil, errors.New("no A or AAAA records found after trying search domains")
 }
 
 // queryDNS sends a DNS query of the specified type and returns the first matching IP.

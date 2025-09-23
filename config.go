@@ -50,7 +50,8 @@ type DeviceConfig struct {
 	SecretKey             string
 	Endpoint              []netip.Addr
 	Peers                 []PeerConfig
-	DNS                   []string
+	DNS                   []netip.Addr
+	SearchDomains         []string
 	MTU                   int
 	ListenPort            *int
 	CheckAlive            []netip.Addr
@@ -63,7 +64,7 @@ type DeviceConfig struct {
 // DeviceSetting contains the parameters for setting up a tun interface
 type DeviceSetting struct {
 	IpcRequest string
-	DNS        []string
+	DNS        []netip.Addr
 	DeviceAddr []netip.Addr
 	MTU        int
 }
@@ -194,25 +195,30 @@ func parseNetIP(section *ini.Section, keyName string) ([]netip.Addr, error) {
 	return ips, nil
 }
 
-func parseDNS(section *ini.Section, keyName string) ([]string, error) {
+func parseDNS(section *ini.Section, keyName string) ([]netip.Addr, []string, error) {
 	key, err := parseString(section, keyName)
 	if err != nil {
 		if strings.Contains(err.Error(), "should not be empty") {
-			return []string{}, nil
+			return []netip.Addr{}, []string{}, nil
 		}
-		return nil, err
+		return nil, nil, err
 	}
 
 	keys := strings.Split(key, ",")
-	var dns = make([]string, 0, len(keys))
+	var ips []netip.Addr
+	var domains []string
 	for _, str := range keys {
 		str = strings.TrimSpace(str)
 		if len(str) == 0 {
 			continue
 		}
-		dns = append(dns, str)
+		if ip, err := netip.ParseAddr(str); err == nil {
+			ips = append(ips, ip)
+		} else {
+			domains = append(domains, str)
+		}
 	}
-	return dns, nil
+	return ips, domains, nil
 }
 
 func parseStrings(section *ini.Section, keyName string) ([]string, error) {
@@ -349,11 +355,12 @@ func ParseInterface(cfg *ini.File, device *DeviceConfig) error {
 	}
 	device.SecretKey = privKey
 
-	dns, err := parseDNS(section, "DNS")
+	dnsIps, searchDomains, err := parseDNS(section, "DNS")
 	if err != nil {
 		return err
 	}
-	device.DNS = dns
+	device.DNS = dnsIps
+	device.SearchDomains = searchDomains
 
 	if sectionKey, err := section.GetKey("MTU"); err == nil {
 		value, err := sectionKey.Int()
