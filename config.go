@@ -647,9 +647,12 @@ func ValidateASecConfig(config *ASecConfigType) error {
 // ParsePeers parses the [Peer] section and extract the information into `peers`
 func ParsePeers(cfg *ini.File, peers *[]PeerConfig) error {
 	sections, err := cfg.SectionsByName("Peer")
-	if len(sections) < 1 || err != nil {
-		return errors.New("at least one [Peer] is expected")
+	if err != nil {
+		*peers = []PeerConfig{}
+		return nil
 	}
+
+	*peers = make([]PeerConfig, 0, len(sections))
 
 	for _, section := range sections {
 		peer := PeerConfig{
