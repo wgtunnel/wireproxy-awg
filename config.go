@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 
 	"net/netip"
@@ -30,19 +31,17 @@ type ASecConfigType struct {
 	junkPacketMaxSize          int    // Jmax
 	initPacketJunkSize         int    // s1
 	responsePacketJunkSize     int    // s2
-	initPacketMagicHeader      uint32 // h1
-	responsePacketMagicHeader  uint32 // h2
-	underloadPacketMagicHeader uint32 // h3
-	transportPacketMagicHeader uint32 // h4
+	cookieReplyPacketJunkSize  int    // s3
+	transportPacketJunkSize    int    // s4
+	initPacketMagicHeader      string // h1
+	responsePacketMagicHeader  string // h2
+	underloadPacketMagicHeader string // h3
+	transportPacketMagicHeader string // h4
 	i1                         *string
 	i2                         *string
 	i3                         *string
 	i4                         *string
 	i5                         *string
-	j1                         *string
-	j2                         *string
-	j3                         *string
-	itime                      *int
 }
 
 // DeviceConfig contains the information to initiate a wireguard connection
@@ -488,52 +487,68 @@ func ParseASecConfig(section *ini.Section) (*ASecConfigType, error) {
 		aSecConfig.responsePacketJunkSize = value
 	}
 
-	if sectionKey, err := section.GetKey("H1"); err == nil {
-		value64, err := sectionKey.Uint64()
+	if sectionKey, err := section.GetKey("S3"); err == nil {
+		value, err := sectionKey.Int()
 		if err != nil {
 			return nil, err
 		}
-		if value64 < 1 || value64 > 4294967295 {
+		if value < 0 {
+			return nil, fmt.Errorf("value of the S3 field must be non-negative")
+		}
+		initializeASecConfig()
+		aSecConfig.cookieReplyPacketJunkSize = value
+	}
+
+	if sectionKey, err := section.GetKey("S4"); err == nil {
+		value, err := sectionKey.Int()
+		if err != nil {
+			return nil, err
+		}
+		if value < 0 {
+			return nil, fmt.Errorf("value of the S4 field must be non-negative")
+		}
+		initializeASecConfig()
+		aSecConfig.transportPacketJunkSize = value
+	}
+
+	if sectionKey, err := section.GetKey("H1"); err == nil {
+		value := sectionKey.String()
+		value64, perr := strconv.ParseUint(value, 10, 32)
+		if perr != nil || value64 < 1 || value64 > 4294967295 {
 			return nil, fmt.Errorf("value of the H1 field must be within the range of 1 to 4294967295")
 		}
 		initializeASecConfig()
-		aSecConfig.initPacketMagicHeader = uint32(value64)
+		aSecConfig.initPacketMagicHeader = value
 	}
 
 	if sectionKey, err := section.GetKey("H2"); err == nil {
-		value64, err := sectionKey.Uint64()
-		if err != nil {
-			return nil, err
-		}
-		if value64 < 1 || value64 > 4294967295 {
+		value := sectionKey.String()
+		value64, perr := strconv.ParseUint(value, 10, 32)
+		if perr != nil || value64 < 1 || value64 > 4294967295 {
 			return nil, fmt.Errorf("value of the H2 field must be within the range of 1 to 4294967295")
 		}
 		initializeASecConfig()
-		aSecConfig.responsePacketMagicHeader = uint32(value64)
+		aSecConfig.responsePacketMagicHeader = value
 	}
 
 	if sectionKey, err := section.GetKey("H3"); err == nil {
-		value64, err := sectionKey.Uint64()
-		if err != nil {
-			return nil, err
-		}
-		if value64 < 1 || value64 > 4294967295 {
+		value := sectionKey.String()
+		value64, perr := strconv.ParseUint(value, 10, 32)
+		if perr != nil || value64 < 1 || value64 > 4294967295 {
 			return nil, fmt.Errorf("value of the H3 field must be within the range of 1 to 4294967295")
 		}
 		initializeASecConfig()
-		aSecConfig.underloadPacketMagicHeader = uint32(value64)
+		aSecConfig.underloadPacketMagicHeader = value
 	}
 
 	if sectionKey, err := section.GetKey("H4"); err == nil {
-		value64, err := sectionKey.Uint64()
-		if err != nil {
-			return nil, err
-		}
-		if value64 < 1 || value64 > 4294967295 {
+		value := sectionKey.String()
+		value64, perr := strconv.ParseUint(value, 10, 32)
+		if perr != nil || value64 < 1 || value64 > 4294967295 {
 			return nil, fmt.Errorf("value of the H4 field must be within the range of 1 to 4294967295")
 		}
 		initializeASecConfig()
-		aSecConfig.transportPacketMagicHeader = uint32(value64)
+		aSecConfig.transportPacketMagicHeader = value
 	}
 
 	if sectionKey, err := section.GetKey("I1"); err == nil {
@@ -562,34 +577,6 @@ func ParseASecConfig(section *ini.Section) (*ASecConfigType, error) {
 		aSecConfig.i5 = &value
 	}
 
-	if sectionKey, err := section.GetKey("J1"); err == nil {
-		value := sectionKey.String()
-		initializeASecConfig()
-		aSecConfig.j1 = &value
-	}
-	if sectionKey, err := section.GetKey("J2"); err == nil {
-		value := sectionKey.String()
-		initializeASecConfig()
-		aSecConfig.j2 = &value
-	}
-	if sectionKey, err := section.GetKey("J3"); err == nil {
-		value := sectionKey.String()
-		initializeASecConfig()
-		aSecConfig.j3 = &value
-	}
-
-	if sectionKey, err := section.GetKey("ITime"); err == nil {
-		value, err := sectionKey.Int()
-		if err != nil {
-			return nil, err
-		}
-		if value < 0 {
-			return nil, fmt.Errorf("value of the ITime field must be non-negative")
-		}
-		initializeASecConfig()
-		aSecConfig.itime = &value
-	}
-
 	if err := ValidateASecConfig(aSecConfig); err != nil {
 		return nil, err
 	}
@@ -608,36 +595,41 @@ func ValidateASecConfig(config *ASecConfigType) error {
 	// Check S1 + 148 ≠ S2 + 92
 	const messageInitiationSize = 148
 	const messageResponseSize = 92
+	const cookieReplySize = 64
 	if messageInitiationSize+config.initPacketJunkSize == messageResponseSize+config.responsePacketJunkSize {
 		return errors.New(
 			"value of the field S1 + message initiation size (148) must not equal S2 + message response size (92)",
 		)
 	}
 
-	// Validate H1-H4 uniqueness (allow unset/default to 0, but check if any are set)
-	headers := []uint32{
+	// Additional checks for S3 (cookie reply)
+	if messageInitiationSize+config.initPacketJunkSize == cookieReplySize+config.cookieReplyPacketJunkSize {
+		return errors.New(
+			"value of the field S1 + message initiation size (148) must not equal S3 + cookie reply size (64)",
+		)
+	}
+	if messageResponseSize+config.responsePacketJunkSize == cookieReplySize+config.cookieReplyPacketJunkSize {
+		return errors.New(
+			"value of the field S2 + message response size (92) must not equal S3 + cookie reply size (64)",
+		)
+	}
+
+	// Validate H1-H4 uniqueness (allow unset/default to empty string)
+	headers := []string{
 		config.initPacketMagicHeader,
 		config.responsePacketMagicHeader,
 		config.underloadPacketMagicHeader,
 		config.transportPacketMagicHeader,
 	}
 	seen := make(map[uint32]bool)
-	anyHeaderSet := false
 	for i, h := range headers {
-		if h != 0 { // Only check non-zero (set) headers
-			anyHeaderSet = true
-			if seen[h] {
+		if h != "" {
+			value64, _ := strconv.ParseUint(h, 10, 32)
+
+			if seen[uint32(value64)] {
 				return fmt.Errorf("values of the H1-H4 fields must be unique; H%d conflicts", i+1)
 			}
-			seen[h] = true
-		}
-	}
-	// If any header is set, all should be set to avoid conflicts with default 0
-	if anyHeaderSet {
-		for i, h := range headers {
-			if h == 0 {
-				return fmt.Errorf("H%d is unset (0) while other headers are set; all H1-H4 must be explicitly set if any are used", i+1)
-			}
+			seen[uint32(value64)] = true
 		}
 	}
 
@@ -859,10 +851,12 @@ func CreateIPCRequest(conf *DeviceConfig, isUpdate bool) (*DeviceSetting, error)
 		aSecBuilder.WriteString(fmt.Sprintf("jmax=%d\n", aSecConfig.junkPacketMaxSize))
 		aSecBuilder.WriteString(fmt.Sprintf("s1=%d\n", aSecConfig.initPacketJunkSize))
 		aSecBuilder.WriteString(fmt.Sprintf("s2=%d\n", aSecConfig.responsePacketJunkSize))
-		aSecBuilder.WriteString(fmt.Sprintf("h1=%d\n", aSecConfig.initPacketMagicHeader))
-		aSecBuilder.WriteString(fmt.Sprintf("h2=%d\n", aSecConfig.responsePacketMagicHeader))
-		aSecBuilder.WriteString(fmt.Sprintf("h3=%d\n", aSecConfig.underloadPacketMagicHeader))
-		aSecBuilder.WriteString(fmt.Sprintf("h4=%d\n", aSecConfig.transportPacketMagicHeader))
+		aSecBuilder.WriteString(fmt.Sprintf("s3=%d\n", aSecConfig.cookieReplyPacketJunkSize))
+		aSecBuilder.WriteString(fmt.Sprintf("s4=%d\n", aSecConfig.transportPacketJunkSize))
+		aSecBuilder.WriteString(fmt.Sprintf("h1=%s\n", aSecConfig.initPacketMagicHeader))
+		aSecBuilder.WriteString(fmt.Sprintf("h2=%s\n", aSecConfig.responsePacketMagicHeader))
+		aSecBuilder.WriteString(fmt.Sprintf("h3=%s\n", aSecConfig.underloadPacketMagicHeader))
+		aSecBuilder.WriteString(fmt.Sprintf("h4=%s\n", aSecConfig.transportPacketMagicHeader))
 
 		if aSecConfig.i1 != nil {
 			aSecBuilder.WriteString(fmt.Sprintf("i1=%s\n", *aSecConfig.i1))
@@ -878,18 +872,6 @@ func CreateIPCRequest(conf *DeviceConfig, isUpdate bool) (*DeviceSetting, error)
 		}
 		if aSecConfig.i5 != nil {
 			aSecBuilder.WriteString(fmt.Sprintf("i5=%s\n", *aSecConfig.i5))
-		}
-		if aSecConfig.j1 != nil {
-			aSecBuilder.WriteString(fmt.Sprintf("j1=%s\n", *aSecConfig.j1))
-		}
-		if aSecConfig.j2 != nil {
-			aSecBuilder.WriteString(fmt.Sprintf("j2=%s\n", *aSecConfig.j2))
-		}
-		if aSecConfig.j3 != nil {
-			aSecBuilder.WriteString(fmt.Sprintf("j3=%s\n", *aSecConfig.j3))
-		}
-		if aSecConfig.itime != nil {
-			aSecBuilder.WriteString(fmt.Sprintf("itime=%d\n", *aSecConfig.itime))
 		}
 
 		request.WriteString(aSecBuilder.String())
