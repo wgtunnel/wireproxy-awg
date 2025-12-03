@@ -4,7 +4,7 @@ go 1.25.1
 
 require (
 	github.com/MakeNowJust/heredoc/v2 v2.0.1
-	github.com/amnezia-vpn/amneziawg-go v1.0.4
+	github.com/amnezia-vpn/amneziawg-go v0.2.16
 	github.com/go-ini/ini v1.67.0
 	github.com/miekg/dns v1.1.68
 	github.com/things-go/go-socks5 v0.1.0
@@ -23,4 +23,4 @@ require (
 	gvisor.dev/gvisor v0.0.0-20231202080848-1f7806d17489 // indirect
 )
 
-replace github.com/amnezia-vpn/amneziawg-go => github.com/wgtunnel/amneziawg-go v0.0.0-20251202130557-f2d9b48c703c
+replace github.com/amnezia-vpn/amneziawg-go => github.com/wgtunnel/amneziawg-go v0.0.0-20251203041619-ce7e843a4cef
