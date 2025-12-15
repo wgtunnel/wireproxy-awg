@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"strconv"
 	"strings"
 
 	"net/netip"
@@ -513,40 +512,24 @@ func ParseASecConfig(section *ini.Section) (*ASecConfigType, error) {
 
 	if sectionKey, err := section.GetKey("H1"); err == nil {
 		value := sectionKey.String()
-		value64, perr := strconv.ParseUint(value, 10, 32)
-		if perr != nil || value64 < 1 || value64 > 4294967295 {
-			return nil, fmt.Errorf("value of the H1 field must be within the range of 1 to 4294967295")
-		}
 		initializeASecConfig()
 		aSecConfig.initPacketMagicHeader = value
 	}
 
 	if sectionKey, err := section.GetKey("H2"); err == nil {
 		value := sectionKey.String()
-		value64, perr := strconv.ParseUint(value, 10, 32)
-		if perr != nil || value64 < 1 || value64 > 4294967295 {
-			return nil, fmt.Errorf("value of the H2 field must be within the range of 1 to 4294967295")
-		}
 		initializeASecConfig()
 		aSecConfig.responsePacketMagicHeader = value
 	}
 
 	if sectionKey, err := section.GetKey("H3"); err == nil {
 		value := sectionKey.String()
-		value64, perr := strconv.ParseUint(value, 10, 32)
-		if perr != nil || value64 < 1 || value64 > 4294967295 {
-			return nil, fmt.Errorf("value of the H3 field must be within the range of 1 to 4294967295")
-		}
 		initializeASecConfig()
 		aSecConfig.underloadPacketMagicHeader = value
 	}
 
 	if sectionKey, err := section.GetKey("H4"); err == nil {
 		value := sectionKey.String()
-		value64, perr := strconv.ParseUint(value, 10, 32)
-		if perr != nil || value64 < 1 || value64 > 4294967295 {
-			return nil, fmt.Errorf("value of the H4 field must be within the range of 1 to 4294967295")
-		}
 		initializeASecConfig()
 		aSecConfig.transportPacketMagicHeader = value
 	}
@@ -613,26 +596,6 @@ func ValidateASecConfig(config *ASecConfigType) error {
 			"value of the field S2 + message response size (92) must not equal S3 + cookie reply size (64)",
 		)
 	}
-
-	// Validate H1-H4 uniqueness (allow unset/default to empty string)
-	headers := []string{
-		config.initPacketMagicHeader,
-		config.responsePacketMagicHeader,
-		config.underloadPacketMagicHeader,
-		config.transportPacketMagicHeader,
-	}
-	seen := make(map[uint32]bool)
-	for i, h := range headers {
-		if h != "" {
-			value64, _ := strconv.ParseUint(h, 10, 32)
-
-			if seen[uint32(value64)] {
-				return fmt.Errorf("values of the H1-H4 fields must be unique; H%d conflicts", i+1)
-			}
-			seen[uint32(value64)] = true
-		}
-	}
-
 	return nil
 }
 
