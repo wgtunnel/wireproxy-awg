@@ -46,7 +46,7 @@ type ASecConfigType struct {
 // DeviceConfig contains the information to initiate a wireguard connection
 type DeviceConfig struct {
 	SecretKey             string
-	Endpoint              []netip.Addr
+	Address               []netip.Addr
 	Peers                 []PeerConfig
 	DNS                   []netip.Addr
 	SearchDomains         []string
@@ -345,7 +345,7 @@ func ParseInterface(cfg *ini.File, device *DeviceConfig) error {
 		return err
 	}
 
-	device.Endpoint = address
+	device.Address = address
 
 	privKey, err := parseBase64KeyToHex(section, "PrivateKey")
 	if err != nil {
@@ -869,8 +869,18 @@ func CreateIPCRequest(conf *DeviceConfig, isUpdate bool) (*DeviceSetting, error)
 		}
 	}
 
-	setting := &DeviceSetting{IpcRequest: request.String(), DNS: conf.DNS, DeviceAddr: conf.Endpoint, MTU: conf.MTU}
+	setting := &DeviceSetting{IpcRequest: request.String(), DNS: conf.DNS, DeviceAddr: conf.Address, MTU: conf.MTU}
 	return setting, nil
+}
+
+func ParsePeerEndpoint(endpoint string) (host netip.Prefix, port uint16, err error) {
+	addrPort, err := netip.ParseAddrPort(endpoint)
+	if err != nil {
+		return netip.Prefix{}, 0, err
+	}
+	addr := addrPort.Addr()
+	prefix := netip.PrefixFrom(addr, addr.BitLen())
+	return prefix, addrPort.Port(), nil
 }
 
 // CreatePeerIPCRequest builds a UAPI string for updating peers only, based on the provided DeviceConfig.
@@ -904,6 +914,6 @@ func CreatePeerIPCRequest(conf *DeviceConfig) (*DeviceSetting, error) {
 		}
 	}
 
-	setting := &DeviceSetting{IpcRequest: request.String(), DNS: conf.DNS, DeviceAddr: conf.Endpoint, MTU: conf.MTU}
+	setting := &DeviceSetting{IpcRequest: request.String(), DNS: conf.DNS, DeviceAddr: conf.Address, MTU: conf.MTU}
 	return setting, nil
 }

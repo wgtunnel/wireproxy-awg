@@ -26,7 +26,7 @@ DNS = 1.1.1.1
 [Peer]
 PublicKey = e8LKAc+f9xEzq9Ar7+MfKRrs+gZ/4yzvpRJLRJ/VJ1w=
 AllowedIPs = 0.0.0.0/0, ::/0
-Endpoint = 94.140.11.15:51820
+Addresses = 94.140.11.15:51820
 PersistentKeepalive = 25`
 	var cfg DeviceConfig
 	iniData, err := loadIniConfig(config)
@@ -50,7 +50,7 @@ DNS = 1.1.1.1
 [Peer]
 PublicKey = e8LKAc+f9xEzq9Ar7+MfKRrs+gZ/4yzvpRJLRJ/VJ1w=
 AllowedIPs = 0.0.0.0/0, ::/0
-Endpoint = 94.140.11.15:51820
+Addresses = 94.140.11.15:51820
 PersistentKeepalive = 25`
 	var cfg DeviceConfig
 	iniData, err := loadIniConfig(config)
@@ -83,7 +83,7 @@ H4 = 4
 [Peer]
 PublicKey = e8LKAc+f9xEzq9Ar7+MfKRrs+gZ/4yzvpRJLRJ/VJ1w=
 AllowedIPs = 0.0.0.0/0, ::/0
-Endpoint = 94.140.11.15:51820
+Addresses = 94.140.11.15:51820
 PersistentKeepalive = 25`
 	var cfg DeviceConfig
 	iniData, err := loadIniConfig(config)
@@ -180,7 +180,7 @@ I1 = <b 0xA1B2C3D4E5F6>
 [Peer]
 PublicKey = e8LKAc+f9xEzq9Ar7+MfKRrs+gZ/4yzvpRJLRJ/VJ1w=
 AllowedIPs = 0.0.0.0/0, ::/0
-Endpoint = 94.140.11.15:51820
+Addresses = 94.140.11.15:51820
 PersistentKeepalive = 25`
 	var cfg DeviceConfig
 	iniData, err := loadIniConfig(config)
@@ -280,7 +280,7 @@ H4 = 4
 [Peer]
 PublicKey = e8LKAc+f9xEzq9Ar7+MfKRrs+gZ/4yzvpRJLRJ/VJ1w=
 AllowedIPs = 0.0.0.0/0, ::/0
-Endpoint = 94.140.11.15:51820
+Addresses = 94.140.11.15:51820
 PersistentKeepalive = 25`
 	var cfg DeviceConfig
 	iniData, err := loadIniConfig(config)
@@ -317,7 +317,7 @@ H4 = 4
 [Peer]
 PublicKey = e8LKAc+f9xEzq9Ar7+MfKRrs+gZ/4yzvpRJLRJ/VJ1w=
 AllowedIPs = 0.0.0.0/0, ::/0
-Endpoint = 94.140.11.15:51820
+Addresses = 94.140.11.15:51820
 PersistentKeepalive = 25`
 	var cfg DeviceConfig
 	iniData, err := loadIniConfig(config)
@@ -354,7 +354,7 @@ H4 = 4
 [Peer]
 PublicKey = e8LKAc+f9xEzq9Ar7+MfKRrs+gZ/4yzvpRJLRJ/VJ1w=
 AllowedIPs = 0.0.0.0/0, ::/0
-Endpoint = 94.140.11.15:51820
+Addresses = 94.140.11.15:51820
 PersistentKeepalive = 25`
 	var cfg DeviceConfig
 	iniData, err := loadIniConfig(config)
@@ -391,7 +391,7 @@ H4 = 4
 [Peer]
 PublicKey = e8LKAc+f9xEzq9Ar7+MfKRrs+gZ/4yzvpRJLRJ/VJ1w=
 AllowedIPs = 0.0.0.0/0, ::/0
-Endpoint = 94.140.11.15:51820
+Addresses = 94.140.11.15:51820
 PersistentKeepalive = 25`
 	var cfg DeviceConfig
 	iniData, err := loadIniConfig(config)
@@ -428,7 +428,7 @@ H4 = 4
 [Peer]
 PublicKey = e8LKAc+f9xEzq9Ar7+MfKRrs+gZ/4yzvpRJLRJ/VJ1w=
 AllowedIPs = 0.0.0.0/0, ::/0
-Endpoint = 94.140.11.15:51820
+Addresses = 94.140.11.15:51820
 PersistentKeepalive = 25`
 	var cfg DeviceConfig
 	iniData, err := loadIniConfig(config)
@@ -456,7 +456,7 @@ DNS = 198.18.0.1,198.18.0.2
 [Peer]
 PublicKey = SHnh4C2aDXhp1gjIqceGhJrhOLSeNYcqWLKcYnzj00U=
 AllowedIPs = 0.0.0.0/0,::/0
-Endpoint = 192.200.144.22:51820`
+Addresses = 192.200.144.22:51820`
 	var cfg DeviceConfig
 	iniData, err := loadIniConfig(config)
 	if err != nil {

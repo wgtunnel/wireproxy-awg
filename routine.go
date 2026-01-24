@@ -225,16 +225,26 @@ func (config *Socks5Config) SpawnRoutine(ctx context.Context, vt *VirtualTun) er
 				}
 				addr = net.JoinHostPort(resolvedIP.String(), port)
 			} else {
-				// Already an IP — optionally prefer IPv4
+				// Prefer IPv4
 				if ip.To4() == nil {
-					// It's IPv6 — try to resolve an IPv4 if available
+					// Try to resolve an IPv4 if available
 					_, ipv4Addr, err := r.Resolve(ctx, host)
 					if err == nil && ipv4Addr.To4() != nil {
 						addr = net.JoinHostPort(ipv4Addr.String(), port)
 					}
 				}
 			}
-			return vt.Tnet.DialContext(ctx, network, addr)
+			conn, err := vt.Tnet.DialContext(ctx, network, addr)
+			if err != nil {
+				vt.Logger.Errorf("DialContext failed for %s %s: %v", network, addr, err)
+				return nil, err
+			}
+			if conn == nil {
+				err = errors.New("DialContext returned nil conn without error")
+				vt.Logger.Errorf("Invalid dial for %s %s: %v", network, addr, err)
+				return nil, err
+			}
+			return conn, nil
 		}),
 		socks5.WithResolver(r),
 		socks5.WithAuthMethods(authMethods),
