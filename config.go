@@ -315,23 +315,6 @@ func parseAllowedIPs(section *ini.Section) ([]netip.Prefix, error) {
 	return ips, nil
 }
 
-func resolveIP(ip string) (*net.IPAddr, error) {
-	return net.ResolveIPAddr("ip", ip)
-}
-
-func resolveIPPAndPort(addr string) (string, error) {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return "", err
-	}
-
-	ip, err := resolveIP(host)
-	if err != nil {
-		return "", err
-	}
-	return net.JoinHostPort(ip.String(), port), nil
-}
-
 // ParseInterface parses the [Interface] section and extract the information into `device`
 func ParseInterface(cfg *ini.File, device *DeviceConfig) error {
 	sections, err := cfg.SectionsByName("Interface")
@@ -631,11 +614,7 @@ func ParsePeers(cfg *ini.File, peers *[]PeerConfig) error {
 
 		if sectionKey, err := section.GetKey("Endpoint"); err == nil {
 			value := sectionKey.String()
-			decoded, err = resolveIPPAndPort(strings.ToLower(value))
-			if err != nil {
-				return err
-			}
-			peer.Endpoint = &decoded
+			peer.Endpoint = &value
 		}
 
 		if sectionKey, err := section.GetKey("PersistentKeepalive"); err == nil {
@@ -846,10 +825,10 @@ func CreateIPCRequest(conf *DeviceConfig, isUpdate bool) (*DeviceSetting, error)
 
 	for _, peer := range conf.Peers {
 		request.WriteString(fmt.Sprintf(heredoc.Doc(`
-				public_key=%s
-				persistent_keepalive_interval=%d
-				preshared_key=%s
-			`),
+             public_key=%s
+             persistent_keepalive_interval=%d
+             preshared_key=%s
+          `),
 			peer.PublicKey, peer.KeepAlive, peer.PreSharedKey,
 		))
 		if peer.Endpoint != nil {
@@ -916,4 +895,36 @@ func CreatePeerIPCRequest(conf *DeviceConfig) (*DeviceSetting, error) {
 
 	setting := &DeviceSetting{IpcRequest: request.String(), DNS: conf.DNS, DeviceAddr: conf.Address, MTU: conf.MTU}
 	return setting, nil
+}
+
+// NeedsResolution returns true if the peer's endpoint is a domain name that needs DNS resolution
+func (p *PeerConfig) NeedsResolution() bool {
+	if p.Endpoint == nil {
+		return false
+	}
+	host, _, err := net.SplitHostPort(*p.Endpoint)
+	if err != nil {
+		return false
+	}
+	_, err = netip.ParseAddr(host)
+	return err != nil // parse failed, it's a domain
+}
+
+// UpdateEndpointIP updates the peer's endpoint with the provided resolved IP, preserving the original port.
+func (p *PeerConfig) UpdateEndpointIP(resolvedIP netip.Addr) error {
+	if p.Endpoint == nil {
+		return errors.New("no endpoint set")
+	}
+	_, port, err := net.SplitHostPort(*p.Endpoint)
+	if err != nil {
+		return err
+	}
+
+	ipStr := resolvedIP.String()
+	if resolvedIP.Is6() {
+		ipStr = "[" + ipStr + "]"
+	}
+	newEndpoint := ipStr + ":" + port
+	p.Endpoint = &newEndpoint
+	return nil
 }
