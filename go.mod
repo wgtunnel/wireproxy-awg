@@ -1,6 +1,6 @@
 module github.com/wgtunnel/wireproxy-awg
 
-go 1.25.1
+go 1.24.4
 
 require (
 	github.com/MakeNowJust/heredoc/v2 v2.0.1
@@ -23,4 +23,4 @@ require (
 	gvisor.dev/gvisor v0.0.0-20231202080848-1f7806d17489 // indirect
 )
 
-replace github.com/amnezia-vpn/amneziawg-go => github.com/wgtunnel/amneziawg-go v0.0.0-20251203041619-ce7e843a4cef
+replace github.com/amnezia-vpn/amneziawg-go => github.com/wgtunnel/amneziawg-go v0.0.0-20260309041639-0569d899c9bf
