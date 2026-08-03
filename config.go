@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 
 	"net/netip"
@@ -20,7 +21,7 @@ type PeerConfig struct {
 	PublicKey    string
 	PreSharedKey string
 	Endpoint     *string
-	KeepAlive    int
+	KeepAlive    string // now supports ranges, so we change to string
 	AllowedIPs   []netip.Prefix
 }
 
@@ -41,6 +42,15 @@ type ASecConfigType struct {
 	i3                         *string
 	i4                         *string
 	i5                         *string
+
+	// Amnezia 3.0 values
+	headerProtectionKey    string // hex after base64 decode
+	contentPaddingAddition string
+	rekeyAfterTime         string
+	rekeyTimeout           string
+	rejectAfterTime        string
+	keepaliveTimeout       string
+	maxHandshakeAttempts   string
 }
 
 // DeviceConfig contains the information to initiate a wireguard connection
@@ -236,25 +246,28 @@ func parseStrings(section *ini.Section, keyName string) ([]string, error) {
 	return result, nil
 }
 
-func parseStringList(section *ini.Section, keyName string) ([]string, error) {
-	key, err := parseString(section, keyName)
-	if err != nil {
-		if strings.Contains(err.Error(), "should not be empty") {
-			return []string{}, nil
-		}
-		return nil, err
+func validateUintRangeOrScalar(s string) error {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "(off)" {
+		return nil
 	}
-
-	keys := strings.Split(key, ",")
-	var strs = make([]string, 0, len(keys))
-	for _, str := range keys {
-		str = strings.TrimSpace(str)
-		if len(str) == 0 {
-			continue
+	if strings.Contains(s, "-") {
+		parts := strings.Split(s, "-")
+		if len(parts) != 2 {
+			return fmt.Errorf("invalid range %q", s)
 		}
-		strs = append(strs, str)
+		lo, err1 := strconv.ParseUint(strings.TrimSpace(parts[0]), 10, 32)
+		hi, err2 := strconv.ParseUint(strings.TrimSpace(parts[1]), 10, 32)
+		if err1 != nil || err2 != nil {
+			return fmt.Errorf("invalid range %q", s)
+		}
+		if lo > hi {
+			return fmt.Errorf("range low > high: %q", s)
+		}
+		return nil
 	}
-	return strs, nil
+	_, err := strconv.ParseUint(s, 10, 32)
+	return err
 }
 
 func parseCIDRNetIP(section *ini.Section, keyName string) ([]netip.Addr, error) {
@@ -543,6 +556,67 @@ func ParseASecConfig(section *ini.Section) (*ASecConfigType, error) {
 		aSecConfig.i5 = &value
 	}
 
+	if sectionKey, err := section.GetKey("HeaderProtectionKey"); err == nil {
+		hexKey, err := encodeBase64ToHex(strings.TrimSpace(sectionKey.String()))
+		if err != nil {
+			return nil, fmt.Errorf("HeaderProtectionKey: %w", err)
+		}
+		initializeASecConfig()
+		aSecConfig.headerProtectionKey = hexKey
+	}
+
+	setRange := func(name string) (string, error) {
+		sectionKey, err := section.GetKey(name)
+		if err != nil {
+			return "", nil
+		}
+		v := strings.TrimSpace(sectionKey.String())
+		if v == "" {
+			return "", nil
+		}
+		if err := validateUintRangeOrScalar(v); err != nil {
+			return "", fmt.Errorf("%s: %w", name, err)
+		}
+		return v, nil
+	}
+
+	if v, err := setRange("ContentPaddingAddition"); err != nil {
+		return nil, err
+	} else if v != "" {
+		initializeASecConfig()
+		aSecConfig.contentPaddingAddition = v
+	}
+	if v, err := setRange("RekeyAfterTime"); err != nil {
+		return nil, err
+	} else if v != "" {
+		initializeASecConfig()
+		aSecConfig.rekeyAfterTime = v
+	}
+	if v, err := setRange("RekeyTimeout"); err != nil {
+		return nil, err
+	} else if v != "" {
+		initializeASecConfig()
+		aSecConfig.rekeyTimeout = v
+	}
+	if v, err := setRange("RejectAfterTime"); err != nil {
+		return nil, err
+	} else if v != "" {
+		initializeASecConfig()
+		aSecConfig.rejectAfterTime = v
+	}
+	if v, err := setRange("KeepaliveTimeout"); err != nil {
+		return nil, err
+	} else if v != "" {
+		initializeASecConfig()
+		aSecConfig.keepaliveTimeout = v
+	}
+	if v, err := setRange("MaxHandshakeAttempts"); err != nil {
+		return nil, err
+	} else if v != "" {
+		initializeASecConfig()
+		aSecConfig.maxHandshakeAttempts = v
+	}
+
 	if err := ValidateASecConfig(aSecConfig); err != nil {
 		return nil, err
 	}
@@ -558,26 +632,38 @@ func ValidateASecConfig(config *ASecConfigType) error {
 		return errors.New("value of the Jmin field must be less than or equal to Jmax field value")
 	}
 
-	// Check S1 + 148 ≠ S2 + 92
-	const messageInitiationSize = 148
-	const messageResponseSize = 92
-	const cookieReplySize = 64
-	if messageInitiationSize+config.initPacketJunkSize == messageResponseSize+config.responsePacketJunkSize {
-		return errors.New(
-			"value of the field S1 + message initiation size (148) must not equal S2 + message response size (92)",
-		)
-	}
+	const (
+		messageInitiationSize = 148
+		messageResponseSize   = 92
+		cookieReplySize       = 64
+		headerCipherNonceSize = 12
+	)
 
-	// Additional checks for S3 (cookie reply)
+	if messageInitiationSize+config.initPacketJunkSize == messageResponseSize+config.responsePacketJunkSize {
+		return errors.New("S1 + 148 must not equal S2 + 92")
+	}
 	if messageInitiationSize+config.initPacketJunkSize == cookieReplySize+config.cookieReplyPacketJunkSize {
-		return errors.New(
-			"value of the field S1 + message initiation size (148) must not equal S3 + cookie reply size (64)",
-		)
+		return errors.New("S1 + 148 must not equal S3 + 64")
 	}
 	if messageResponseSize+config.responsePacketJunkSize == cookieReplySize+config.cookieReplyPacketJunkSize {
-		return errors.New(
-			"value of the field S2 + message response size (92) must not equal S3 + cookie reply size (64)",
-		)
+		return errors.New("S2 + 92 must not equal S3 + 64")
+	}
+
+	if config.headerProtectionKey != "" {
+		checks := []struct {
+			name string
+			val  int
+		}{
+			{"S1", config.initPacketJunkSize},
+			{"S2", config.responsePacketJunkSize},
+			{"S3", config.cookieReplyPacketJunkSize},
+			{"S4", config.transportPacketJunkSize},
+		}
+		for _, c := range checks {
+			if c.val < headerCipherNonceSize {
+				return fmt.Errorf("%s must be >= %d when HeaderProtectionKey is set", c.name, headerCipherNonceSize)
+			}
+		}
 	}
 	return nil
 }
@@ -595,7 +681,7 @@ func ParsePeers(cfg *ini.File, peers *[]PeerConfig) error {
 	for _, section := range sections {
 		peer := PeerConfig{
 			PreSharedKey: "0000000000000000000000000000000000000000000000000000000000000000",
-			KeepAlive:    0,
+			KeepAlive:    "",
 		}
 
 		decoded, err := parseBase64KeyToHex(section, "PublicKey")
@@ -618,11 +704,13 @@ func ParsePeers(cfg *ini.File, peers *[]PeerConfig) error {
 		}
 
 		if sectionKey, err := section.GetKey("PersistentKeepalive"); err == nil {
-			value, err := sectionKey.Int()
-			if err != nil {
-				return err
+			v := strings.TrimSpace(sectionKey.String())
+			if v != "" {
+				if err := validateUintRangeOrScalar(v); err != nil {
+					return fmt.Errorf("PersistentKeepalive: %w", err)
+				}
+				peer.KeepAlive = v
 			}
-			peer.KeepAlive = value
 		}
 
 		peer.AllowedIPs, err = parseAllowedIPs(section)
@@ -815,6 +903,27 @@ func CreateIPCRequest(conf *DeviceConfig, isUpdate bool) (*DeviceSetting, error)
 		if aSecConfig.i5 != nil {
 			aSecBuilder.WriteString(fmt.Sprintf("i5=%s\n", *aSecConfig.i5))
 		}
+		if aSecConfig.headerProtectionKey != "" {
+			aSecBuilder.WriteString(fmt.Sprintf("header_protection_key=%s\n", aSecConfig.headerProtectionKey))
+		}
+		if aSecConfig.contentPaddingAddition != "" {
+			aSecBuilder.WriteString(fmt.Sprintf("content_padding_addition=%s\n", aSecConfig.contentPaddingAddition))
+		}
+		if aSecConfig.rekeyAfterTime != "" {
+			aSecBuilder.WriteString(fmt.Sprintf("rekey_after_time=%s\n", aSecConfig.rekeyAfterTime))
+		}
+		if aSecConfig.rekeyTimeout != "" {
+			aSecBuilder.WriteString(fmt.Sprintf("rekey_timeout=%s\n", aSecConfig.rekeyTimeout))
+		}
+		if aSecConfig.rejectAfterTime != "" {
+			aSecBuilder.WriteString(fmt.Sprintf("reject_after_time=%s\n", aSecConfig.rejectAfterTime))
+		}
+		if aSecConfig.keepaliveTimeout != "" {
+			aSecBuilder.WriteString(fmt.Sprintf("keepalive_timeout=%s\n", aSecConfig.keepaliveTimeout))
+		}
+		if aSecConfig.maxHandshakeAttempts != "" {
+			aSecBuilder.WriteString(fmt.Sprintf("max_handshake_attempts=%s\n", aSecConfig.maxHandshakeAttempts))
+		}
 
 		request.WriteString(aSecBuilder.String())
 	}
@@ -824,13 +933,11 @@ func CreateIPCRequest(conf *DeviceConfig, isUpdate bool) (*DeviceSetting, error)
 	}
 
 	for _, peer := range conf.Peers {
-		request.WriteString(fmt.Sprintf(heredoc.Doc(`
-             public_key=%s
-             persistent_keepalive_interval=%d
-             preshared_key=%s
-          `),
-			peer.PublicKey, peer.KeepAlive, peer.PreSharedKey,
-		))
+		request.WriteString(fmt.Sprintf("public_key=%s\n", peer.PublicKey))
+		if peer.KeepAlive != "" {
+			request.WriteString(fmt.Sprintf("persistent_keepalive_interval=%s\n", peer.KeepAlive))
+		}
+		request.WriteString(fmt.Sprintf("preshared_key=%s\n", peer.PreSharedKey))
 		if peer.Endpoint != nil {
 			request.WriteString(fmt.Sprintf("endpoint=%s\n", *peer.Endpoint))
 		}
@@ -872,7 +979,9 @@ func CreatePeerIPCRequest(conf *DeviceConfig) (*DeviceSetting, error) {
 		request.WriteString(fmt.Sprintf("public_key=%s\n", peer.PublicKey))
 		request.WriteString("update_only=true\n")
 
-		request.WriteString(fmt.Sprintf("persistent_keepalive_interval=%d\n", peer.KeepAlive))
+		if peer.KeepAlive != "" {
+			request.WriteString(fmt.Sprintf("persistent_keepalive_interval=%s\n", peer.KeepAlive))
+		}
 		request.WriteString(fmt.Sprintf("preshared_key=%s\n", peer.PreSharedKey))
 
 		if peer.Endpoint != nil {
