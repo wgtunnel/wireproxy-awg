@@ -51,22 +51,23 @@ type ASecConfigType struct {
 	rejectAfterTime        string
 	keepaliveTimeout       string
 	maxHandshakeAttempts   string
+
+	// Amnezia 3.1 values
+	randomTrailers string
 }
 
 // DeviceConfig contains the information to initiate a wireguard connection
 type DeviceConfig struct {
-	SecretKey             string
-	Address               []netip.Addr
-	Peers                 []PeerConfig
-	DNS                   []netip.Addr
-	SearchDomains         []string
-	MTU                   int
-	ListenPort            *int
-	CheckAlive            []netip.Addr
-	DomainBlockingEnabled bool
-	BlockedDomains        []string
-	CheckAliveInterval    int
-	ASecConfig            *ASecConfigType
+	SecretKey          string
+	Address            []netip.Addr
+	Peers              []PeerConfig
+	DNS                []netip.Addr
+	SearchDomains      []string
+	MTU                int
+	ListenPort         *int
+	CheckAlive         []netip.Addr
+	CheckAliveInterval int
+	ASecConfig         *ASecConfigType
 }
 
 // DeviceSetting contains the parameters for setting up a tun interface
@@ -378,20 +379,6 @@ func ParseInterface(cfg *ini.File, device *DeviceConfig) error {
 	}
 	device.CheckAlive = checkAlive
 
-	if sectionKey, err := section.GetKey("DomainBlockingEnabled"); err == nil {
-		value, err := sectionKey.Bool()
-		if err != nil {
-			return err
-		}
-		device.DomainBlockingEnabled = value
-	}
-
-	blockedDomains, err := parseStrings(section, "BlockedDomains")
-	if err != nil {
-		return err
-	}
-	device.BlockedDomains = blockedDomains
-
 	device.CheckAliveInterval = 5
 	if sectionKey, err := section.GetKey("CheckAliveInterval"); err == nil {
 		value, err := sectionKey.Int()
@@ -615,6 +602,12 @@ func ParseASecConfig(section *ini.Section) (*ASecConfigType, error) {
 	} else if v != "" {
 		initializeASecConfig()
 		aSecConfig.maxHandshakeAttempts = v
+	}
+
+	if sectionKey, err := section.GetKey("RandomTrailers"); err == nil {
+		value := sectionKey.String()
+		initializeASecConfig()
+		aSecConfig.randomTrailers = value
 	}
 
 	if err := ValidateASecConfig(aSecConfig); err != nil {
@@ -923,6 +916,9 @@ func CreateIPCRequest(conf *DeviceConfig, isUpdate bool) (*DeviceSetting, error)
 		}
 		if aSecConfig.maxHandshakeAttempts != "" {
 			aSecBuilder.WriteString(fmt.Sprintf("max_handshake_attempts=%s\n", aSecConfig.maxHandshakeAttempts))
+		}
+		if aSecConfig.maxHandshakeAttempts != "" {
+			aSecBuilder.WriteString(fmt.Sprintf("random_trailers=%s\n", aSecConfig.randomTrailers))
 		}
 
 		request.WriteString(aSecBuilder.String())
