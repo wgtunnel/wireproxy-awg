@@ -54,6 +54,7 @@ type ASecConfigType struct {
 
 	// Amnezia 3.1 values
 	randomTrailers string
+	disableCookies string
 }
 
 // DeviceConfig contains the information to initiate a wireguard connection
@@ -610,6 +611,12 @@ func ParseASecConfig(section *ini.Section) (*ASecConfigType, error) {
 		aSecConfig.randomTrailers = value
 	}
 
+	if sectionKey, err := section.GetKey("DisableCookies"); err == nil {
+		value := sectionKey.String()
+		initializeASecConfig()
+		aSecConfig.disableCookies = value
+	}
+
 	if err := ValidateASecConfig(aSecConfig); err != nil {
 		return nil, err
 	}
@@ -917,8 +924,14 @@ func CreateIPCRequest(conf *DeviceConfig, isUpdate bool) (*DeviceSetting, error)
 		if aSecConfig.maxHandshakeAttempts != "" {
 			aSecBuilder.WriteString(fmt.Sprintf("max_handshake_attempts=%s\n", aSecConfig.maxHandshakeAttempts))
 		}
-		if aSecConfig.maxHandshakeAttempts != "" {
-			aSecBuilder.WriteString(fmt.Sprintf("random_trailers=%s\n", aSecConfig.randomTrailers))
+		if aSecConfig.randomTrailers != "" {
+			trailerBool := toUapiBool(aSecConfig.randomTrailers)
+			aSecBuilder.WriteString(fmt.Sprintf("random_trailers=%s\n", trailerBool))
+		}
+
+		if aSecConfig.disableCookies != "" {
+			cookieBool := toUapiBool(aSecConfig.disableCookies)
+			aSecBuilder.WriteString(fmt.Sprintf("disable_cookies=%s\n", cookieBool))
 		}
 
 		request.WriteString(aSecBuilder.String())
@@ -953,6 +966,17 @@ func CreateIPCRequest(conf *DeviceConfig, isUpdate bool) (*DeviceSetting, error)
 
 	setting := &DeviceSetting{IpcRequest: request.String(), DNS: conf.DNS, DeviceAddr: conf.Address, MTU: conf.MTU}
 	return setting, nil
+}
+
+func toUapiBool(value string) string {
+	switch value {
+	case "true", "on", "1":
+		return "1"
+	case "false", "off", "0":
+		return "0"
+	default:
+		return "0"
+	}
 }
 
 func ParsePeerEndpoint(endpoint string) (host netip.Prefix, port uint16, err error) {
