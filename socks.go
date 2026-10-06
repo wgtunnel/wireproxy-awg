@@ -115,8 +115,10 @@ func serveSocks4(dialer *tunDialer, logger *device.Logger, conn net.Conn, br *bu
 
 	writeSocks4Reply(conn, socks4RequestGranted)
 
-	// Both directions copy through the shared 64KB buffer pool (pool.go).
-	go copyThenClose(peer, io.MultiReader(br, conn), peer)
+	// Both directions copy through the shared 64KB buffer pool (pool.go);
+	// br and conn are passed as separate sources so no io.MultiReader is
+	// allocated per relayed connection.
+	go copyThenClose(peer, peer, br, conn)
 	_ = copyBuffer(conn, peer)
 }
 

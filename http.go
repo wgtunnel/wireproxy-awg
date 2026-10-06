@@ -181,15 +181,13 @@ func (s *HTTPServer) forward(req *http.Request, conn net.Conn, br *bufio.Reader)
 	if err = req.Write(peer); err != nil {
 		return false
 	}
-	if req.Body != nil {
-		_ = req.Body.Close()
-	}
+	copyThenClose(io.Discard, req.Body, req.Body)
 
 	resp, err := http.ReadResponse(bufio.NewReader(peer), req)
 	if err != nil {
 		return false
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer copyThenClose(io.Discard, resp.Body, resp.Body)
 
 	// A 101 response switches the connection to an opaque tunnel (e.g.
 	// WebSocket). Connection/Upgrade headers must reach the client
@@ -266,9 +264,11 @@ func (s *HTTPServer) tunnel(req *http.Request, conn net.Conn, br *bufio.Reader) 
 // relay copies bidirectionally between the client and the origin after a
 // CONNECT or a protocol upgrade. Bytes already buffered in br (read past
 // the request headers) are delivered first so nothing is lost. Both
-// directions copy through the shared 64KB buffer pool (see pool.go).
+// directions copy through the shared 64KB buffer pool (see pool.go);
+// passing br and conn as separate sources avoids allocating an
+// io.MultiReader per relayed connection.
 func (s *HTTPServer) relay(conn net.Conn, peer net.Conn, br *bufio.Reader) {
-	go copyThenClose(peer, io.MultiReader(br, conn), peer)
+	go copyThenClose(peer, peer, br, conn)
 	_ = copyBuffer(conn, peer)
 }
 
