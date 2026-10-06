@@ -73,6 +73,7 @@ func (d *VirtualTun) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var buf bytes.Buffer
+		buf.Grow(len(get) + (strings.Count(get, "\n") * 2))
 		for _, peer := range strings.Split(get, "\n") {
 			pair := strings.SplitN(peer, "=", 2)
 			if len(pair) != 2 {
@@ -89,7 +90,7 @@ func (d *VirtualTun) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(buf.Bytes())
+		buf.WriteTo(w)
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
