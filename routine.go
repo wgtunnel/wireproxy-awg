@@ -18,7 +18,6 @@ import (
 	srand "crypto/rand"
 
 	"github.com/things-go/go-socks5"
-	"github.com/things-go/go-socks5/bufferpool"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
@@ -248,7 +247,9 @@ func (config *Socks5Config) SpawnRoutine(ctx context.Context, vt *VirtualTun) er
 		}),
 		socks5.WithResolver(r),
 		socks5.WithAuthMethods(authMethods),
-		socks5.WithBufferPool(bufferpool.NewPool(256 * 1024))}
+		// go-socks5's BufPool interface is satisfied by the shared 64KB
+		// pool every relay path uses (see pool.go) — one pool total.
+		socks5.WithBufferPool(&buffers)}
 
 	server := socks5.NewServer(options...)
 	logger.Verbosef("SOCKS5 server object created")
