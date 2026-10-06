@@ -117,17 +117,32 @@ PersistentKeepalive = 25`
 	if cfg.ASecConfig.i5 != nil {
 		t.Error("i5 should be nil when not set")
 	}
-	if cfg.ASecConfig.j1 != nil {
-		t.Error("j1 should be nil when not set")
+	if cfg.ASecConfig.headerProtectionKey != "" {
+		t.Error("headerProtectionKey should be empty when not set")
 	}
-	if cfg.ASecConfig.j2 != nil {
-		t.Error("j2 should be nil when not set")
+	if cfg.ASecConfig.contentPaddingAddition != "" {
+		t.Error("contentPaddingAddition should be empty when not set")
 	}
-	if cfg.ASecConfig.j3 != nil {
-		t.Error("j3 should be nil when not set")
+	if cfg.ASecConfig.rekeyAfterTime != "" {
+		t.Error("rekeyAfterTime should be empty when not set")
 	}
-	if cfg.ASecConfig.itime != nil {
-		t.Error("itime should be nil when not set")
+	if cfg.ASecConfig.rekeyTimeout != "" {
+		t.Error("rekeyTimeout should be empty when not set")
+	}
+	if cfg.ASecConfig.rejectAfterTime != "" {
+		t.Error("rejectAfterTime should be empty when not set")
+	}
+	if cfg.ASecConfig.keepaliveTimeout != "" {
+		t.Error("keepaliveTimeout should be empty when not set")
+	}
+	if cfg.ASecConfig.maxHandshakeAttempts != "" {
+		t.Error("maxHandshakeAttempts should be empty when not set")
+	}
+	if cfg.ASecConfig.randomTrailers != "" {
+		t.Error("randomTrailers should be empty when not set")
+	}
+	if cfg.ASecConfig.disableCookies != "" {
+		t.Error("disableCookies should be empty when not set")
 	}
 
 	// Verify that required fields are set correctly
@@ -146,16 +161,22 @@ PersistentKeepalive = 25`
 	if cfg.ASecConfig.responsePacketJunkSize != 0 {
 		t.Error("responsePacketJunkSize should be 0")
 	}
-	if cfg.ASecConfig.initPacketMagicHeader != 1 {
+	if cfg.ASecConfig.cookieReplyPacketJunkSize != 0 {
+		t.Error("cookieReplyPacketJunkSize should be 0")
+	}
+	if cfg.ASecConfig.transportPacketJunkSize != 0 {
+		t.Error("transportPacketJunkSize should be 0")
+	}
+	if cfg.ASecConfig.initPacketMagicHeader == nil || *cfg.ASecConfig.initPacketMagicHeader != "1" {
 		t.Error("initPacketMagicHeader should be 1")
 	}
-	if cfg.ASecConfig.responsePacketMagicHeader != 2 {
+	if cfg.ASecConfig.responsePacketMagicHeader == nil || *cfg.ASecConfig.responsePacketMagicHeader != "2" {
 		t.Error("responsePacketMagicHeader should be 2")
 	}
-	if cfg.ASecConfig.underloadPacketMagicHeader != 3 {
+	if cfg.ASecConfig.underloadPacketMagicHeader == nil || *cfg.ASecConfig.underloadPacketMagicHeader != "3" {
 		t.Error("underloadPacketMagicHeader should be 3")
 	}
-	if cfg.ASecConfig.transportPacketMagicHeader != 4 {
+	if cfg.ASecConfig.transportPacketMagicHeader == nil || *cfg.ASecConfig.transportPacketMagicHeader != "4" {
 		t.Error("transportPacketMagicHeader should be 4")
 	}
 }
@@ -218,17 +239,32 @@ PersistentKeepalive = 25`
 	if cfg.ASecConfig.i5 != nil {
 		t.Error("i5 should be nil when not set")
 	}
-	if cfg.ASecConfig.j1 != nil {
-		t.Error("j1 should be nil when not set")
+	if cfg.ASecConfig.headerProtectionKey != "" {
+		t.Error("headerProtectionKey should be empty when not set")
 	}
-	if cfg.ASecConfig.j2 != nil {
-		t.Error("j2 should be nil when not set")
+	if cfg.ASecConfig.contentPaddingAddition != "" {
+		t.Error("contentPaddingAddition should be empty when not set")
 	}
-	if cfg.ASecConfig.j3 != nil {
-		t.Error("j3 should be nil when not set")
+	if cfg.ASecConfig.rekeyAfterTime != "" {
+		t.Error("rekeyAfterTime should be empty when not set")
 	}
-	if cfg.ASecConfig.itime != nil {
-		t.Error("itime should be nil when not set")
+	if cfg.ASecConfig.rekeyTimeout != "" {
+		t.Error("rekeyTimeout should be empty when not set")
+	}
+	if cfg.ASecConfig.rejectAfterTime != "" {
+		t.Error("rejectAfterTime should be empty when not set")
+	}
+	if cfg.ASecConfig.keepaliveTimeout != "" {
+		t.Error("keepaliveTimeout should be empty when not set")
+	}
+	if cfg.ASecConfig.maxHandshakeAttempts != "" {
+		t.Error("maxHandshakeAttempts should be empty when not set")
+	}
+	if cfg.ASecConfig.randomTrailers != "" {
+		t.Error("randomTrailers should be empty when not set")
+	}
+	if cfg.ASecConfig.disableCookies != "" {
+		t.Error("disableCookies should be empty when not set")
 	}
 
 	// Verify that required fields are set correctly
@@ -247,16 +283,22 @@ PersistentKeepalive = 25`
 	if cfg.ASecConfig.responsePacketJunkSize != 0 {
 		t.Error("responsePacketJunkSize should be 0")
 	}
-	if cfg.ASecConfig.initPacketMagicHeader != 1 {
+	if cfg.ASecConfig.cookieReplyPacketJunkSize != 0 {
+		t.Error("cookieReplyPacketJunkSize should be 0")
+	}
+	if cfg.ASecConfig.transportPacketJunkSize != 0 {
+		t.Error("transportPacketJunkSize should be 0")
+	}
+	if cfg.ASecConfig.initPacketMagicHeader == nil || *cfg.ASecConfig.initPacketMagicHeader != "1" {
 		t.Error("initPacketMagicHeader should be 1")
 	}
-	if cfg.ASecConfig.responsePacketMagicHeader != 2 {
+	if cfg.ASecConfig.responsePacketMagicHeader == nil || *cfg.ASecConfig.responsePacketMagicHeader != "2" {
 		t.Error("responsePacketMagicHeader should be 2")
 	}
-	if cfg.ASecConfig.underloadPacketMagicHeader != 3 {
+	if cfg.ASecConfig.underloadPacketMagicHeader == nil || *cfg.ASecConfig.underloadPacketMagicHeader != "3" {
 		t.Error("underloadPacketMagicHeader should be 3")
 	}
-	if cfg.ASecConfig.transportPacketMagicHeader != 4 {
+	if cfg.ASecConfig.transportPacketMagicHeader == nil || *cfg.ASecConfig.transportPacketMagicHeader != "4" {
 		t.Error("transportPacketMagicHeader should be 4")
 	}
 }
@@ -267,7 +309,7 @@ func TestWireguardConfWithInvalid1AWGParams(t *testing.T) {
 PrivateKey = LAr1aNSNF9d0MjwUgAVC4020T0N/E5NUtqVv5EnsSz0=
 Address = 10.5.0.2
 DNS = 1.1.1.1
-Jc = 200
+Jc = 201
 Jmin = 10
 Jmax = 50
 S1 = 0
@@ -288,7 +330,7 @@ PersistentKeepalive = 25`
 		t.Fatal(err)
 	}
 
-	expectedError := "value of the Jc field must be within the range of 1 to 128"
+	expectedError := "value of the Jc field must be within the range of 0 to 200"
 	err = ParseInterface(iniData, &cfg)
 	if err == nil {
 		t.Fatal("error expected")
@@ -362,7 +404,7 @@ PersistentKeepalive = 25`
 		t.Fatal(err)
 	}
 
-	expectedError := "value of the Jmax field must be less than or equal 1280"
+	expectedError := "value of the Jmax field must be within the range of 0 to 1280"
 	err = ParseInterface(iniData, &cfg)
 	if err == nil {
 		t.Fatal("error expected")
@@ -399,7 +441,7 @@ PersistentKeepalive = 25`
 		t.Fatal(err)
 	}
 
-	expectedError := "value of the field S1 + message initiation size (148) must not equal S2 + message response size (92)"
+	expectedError := "S1 + 148 must not equal S2 + 92"
 	err = ParseInterface(iniData, &cfg)
 	if err == nil {
 		t.Fatal("error expected")
@@ -410,6 +452,8 @@ PersistentKeepalive = 25`
 }
 
 func TestWireguardConfWithInvalid5AWGParams(t *testing.T) {
+	// HeaderProtectionKey requires S1..S4 >= 12
+	// Use a valid 32-byte base64 key (32 bytes = 44 chars base64)
 	const config = `
 [Interface]
 PrivateKey = LAr1aNSNF9d0MjwUgAVC4020T0N/E5NUtqVv5EnsSz0=
@@ -420,10 +464,9 @@ Jmin = 10
 Jmax = 50
 S1 = 0
 S2 = 0
-H1 = 1
-H2 = 2
-H3 = 2
-H4 = 4
+S3 = 0
+S4 = 0
+HeaderProtectionKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 
 [Peer]
 PublicKey = e8LKAc+f9xEzq9Ar7+MfKRrs+gZ/4yzvpRJLRJ/VJ1w=
@@ -436,7 +479,7 @@ PersistentKeepalive = 25`
 		t.Fatal(err)
 	}
 
-	expectedError := "values of the H1-H4 fields must be unique"
+	expectedError := "S1 must be >= 12 when HeaderProtectionKey is set"
 	err = ParseInterface(iniData, &cfg)
 	if err == nil {
 		t.Fatal("error expected")
