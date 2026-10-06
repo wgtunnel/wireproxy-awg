@@ -111,6 +111,10 @@ func (r *TUNResolver) queryDNS(ctx context.Context, dnsServer, name string, qtyp
 		return nil, err
 	}
 
+	if resp.Id != msg.Id {
+		return nil, errors.New("mismatched DNS response ID")
+	}
+
 	for _, ans := range resp.Answer {
 		switch rr := ans.(type) {
 		case *dns.A:
