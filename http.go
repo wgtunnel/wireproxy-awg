@@ -2,6 +2,7 @@ package wireproxy
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -60,6 +61,12 @@ func (s *HTTPServer) ListenAndServe(ctx context.Context, network, addr string) e
 	}
 	s.logger.Verbosef("HTTP listener bound successfully on %s", addr)
 
+	return s.Serve(ctx, listener)
+}
+
+// Serve serves HTTP proxy requests on the given listener.
+// This is useful for testing where the caller wants to control the listener.
+func (s *HTTPServer) Serve(ctx context.Context, listener net.Listener) error {
 	go func() {
 		<-ctx.Done()
 		_ = listener.Close()
@@ -273,20 +280,22 @@ func (s *HTTPServer) relay(conn net.Conn, peer net.Conn, br *bufio.Reader) {
 }
 
 func (s *HTTPServer) writeSimpleResponse(conn net.Conn, code int, extraHeaders map[string]string) {
-	var b strings.Builder
-	b.WriteString("HTTP/1.1 ")
-	b.WriteString(strconv.Itoa(code))
-	b.WriteByte(' ')
-	b.WriteString(http.StatusText(code))
-	b.WriteString("\r\n")
+	var buf bytes.Buffer
+	buf.Grow(256)
+	buf.WriteString("HTTP/1.1 ")
+	buf.WriteString(strconv.Itoa(code))
+	buf.WriteString(" ")
+	buf.WriteString(http.StatusText(code))
+	buf.WriteString("\r\n")
 	for k, v := range extraHeaders {
-		b.WriteString(k)
-		b.WriteString(": ")
-		b.WriteString(v)
-		b.WriteString("\r\n")
+		buf.WriteString(k)
+		buf.WriteString(": ")
+		buf.WriteString(v)
+		buf.WriteString("\r\n")
 	}
-	b.WriteString("Content-Length: 0\r\nConnection: close\r\n\r\n")
-	_, _ = conn.Write([]byte(b.String()))
+	buf.WriteString("Content-Length: 0\r\nConnection: close\r\n\r\n")
+
+	buf.WriteTo(conn)
 }
 
 func requestWantsKeepAlive(req *http.Request) bool {
