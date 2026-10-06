@@ -304,8 +304,10 @@ func (config *HTTPConfig) SpawnRoutine(ctx context.Context, vt *VirtualTun) erro
 	logger.Verbosef("HTTP SpawnRoutine started for bindAddress %s", config.BindAddress)
 
 	server := &HTTPServer{
-		config:       config,
-		dial:         vt.Tnet.Dial,
+		config: config,
+		// All proxy protocols share one tunnel dialer (dial.go) so
+		// hostname resolution behaves identically on every path.
+		dial:         newTUNDialer(vt).Dial,
 		auth:         CredentialValidator{config.Username, config.Password},
 		logger:       logger,
 		authRequired: config.Username != "" || config.Password != "",
