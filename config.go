@@ -33,10 +33,10 @@ type ASecConfigType struct {
 	responsePacketJunkSize     int    // s2
 	cookieReplyPacketJunkSize  int    // s3
 	transportPacketJunkSize    int    // s4
-	initPacketMagicHeader      string // h1
-	responsePacketMagicHeader  string // h2
-	underloadPacketMagicHeader string // h3
-	transportPacketMagicHeader string // h4
+	initPacketMagicHeader      *string // h1
+	responsePacketMagicHeader  *string // h2
+	underloadPacketMagicHeader *string // h3
+	transportPacketMagicHeader *string // h4
 	i1                         *string
 	i2                         *string
 	i3                         *string
@@ -497,25 +497,25 @@ func ParseASecConfig(section *ini.Section) (*ASecConfigType, error) {
 	if sectionKey, err := section.GetKey("H1"); err == nil {
 		value := sectionKey.String()
 		initializeASecConfig()
-		aSecConfig.initPacketMagicHeader = value
+		aSecConfig.initPacketMagicHeader = &value
 	}
 
 	if sectionKey, err := section.GetKey("H2"); err == nil {
 		value := sectionKey.String()
 		initializeASecConfig()
-		aSecConfig.responsePacketMagicHeader = value
+		aSecConfig.responsePacketMagicHeader = &value
 	}
 
 	if sectionKey, err := section.GetKey("H3"); err == nil {
 		value := sectionKey.String()
 		initializeASecConfig()
-		aSecConfig.underloadPacketMagicHeader = value
+		aSecConfig.underloadPacketMagicHeader = &value
 	}
 
 	if sectionKey, err := section.GetKey("H4"); err == nil {
 		value := sectionKey.String()
 		initializeASecConfig()
-		aSecConfig.transportPacketMagicHeader = value
+		aSecConfig.transportPacketMagicHeader = &value
 	}
 
 	if sectionKey, err := section.GetKey("I1"); err == nil {
@@ -883,10 +883,18 @@ func CreateIPCRequest(conf *DeviceConfig, isUpdate bool) (*DeviceSetting, error)
 		aSecBuilder.WriteString(fmt.Sprintf("s2=%d\n", aSecConfig.responsePacketJunkSize))
 		aSecBuilder.WriteString(fmt.Sprintf("s3=%d\n", aSecConfig.cookieReplyPacketJunkSize))
 		aSecBuilder.WriteString(fmt.Sprintf("s4=%d\n", aSecConfig.transportPacketJunkSize))
-		aSecBuilder.WriteString(fmt.Sprintf("h1=%s\n", aSecConfig.initPacketMagicHeader))
-		aSecBuilder.WriteString(fmt.Sprintf("h2=%s\n", aSecConfig.responsePacketMagicHeader))
-		aSecBuilder.WriteString(fmt.Sprintf("h3=%s\n", aSecConfig.underloadPacketMagicHeader))
-		aSecBuilder.WriteString(fmt.Sprintf("h4=%s\n", aSecConfig.transportPacketMagicHeader))
+		if aSecConfig.initPacketMagicHeader != nil {
+			aSecBuilder.WriteString(fmt.Sprintf("h1=%s\n", *aSecConfig.initPacketMagicHeader))
+		}
+		if aSecConfig.responsePacketMagicHeader != nil {
+			aSecBuilder.WriteString(fmt.Sprintf("h2=%s\n", *aSecConfig.responsePacketMagicHeader))
+		}
+		if aSecConfig.underloadPacketMagicHeader != nil {
+			aSecBuilder.WriteString(fmt.Sprintf("h3=%s\n", *aSecConfig.underloadPacketMagicHeader))
+		}
+		if aSecConfig.transportPacketMagicHeader != nil {
+			aSecBuilder.WriteString(fmt.Sprintf("h4=%s\n", *aSecConfig.transportPacketMagicHeader))
+		}
 
 		if aSecConfig.i1 != nil {
 			aSecBuilder.WriteString(fmt.Sprintf("i1=%s\n", *aSecConfig.i1))
