@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"io"
 	"math/rand"
 	"net"
 	"net/http"
@@ -207,45 +206,11 @@ func (config *Socks5Config) SpawnRoutine(ctx context.Context, vt *VirtualTun) er
 		authMethods = append(authMethods, socks5.NoAuthAuthenticator{})
 	}
 
-	r := &TUNResolver{vt: vt}
+	dialer := newTUNDialer(vt)
 	options := []socks5.Option{
-		socks5.WithDial(func(ctx context.Context, network, addr string) (net.Conn, error) {
-			host, port, err := net.SplitHostPort(addr)
-			if err != nil {
-				return nil, err
-			}
-
-			ip := net.ParseIP(host)
-			if ip == nil {
-				// Domain name, resolve using TUNResolver
-				_, resolvedIP, err := r.Resolve(ctx, host)
-				if err != nil {
-					return nil, err
-				}
-				addr = net.JoinHostPort(resolvedIP.String(), port)
-			} else {
-				// Prefer IPv4
-				if ip.To4() == nil {
-					// Try to resolve an IPv4 if available
-					_, ipv4Addr, err := r.Resolve(ctx, host)
-					if err == nil && ipv4Addr.To4() != nil {
-						addr = net.JoinHostPort(ipv4Addr.String(), port)
-					}
-				}
-			}
-			conn, err := vt.Tnet.DialContext(ctx, network, addr)
-			if err != nil {
-				vt.Logger.Errorf("DialContext failed for %s %s: %v", network, addr, err)
-				return nil, err
-			}
-			if conn == nil {
-				err = errors.New("DialContext returned nil conn without error")
-				vt.Logger.Errorf("Invalid dial for %s %s: %v", network, addr, err)
-				return nil, err
-			}
-			return conn, nil
-		}),
-		socks5.WithResolver(r),
+		// Hostnames are resolved by the shared tunnel dialer (dial.go).
+		socks5.WithDial(dialer.DialContext),
+		socks5.WithResolver(dialer.resolver),
 		socks5.WithAuthMethods(authMethods),
 		// go-socks5's BufPool interface is satisfied by the shared 64KB
 		// pool every relay path uses (see pool.go) — one pool total.
@@ -278,23 +243,9 @@ func (config *Socks5Config) SpawnRoutine(ctx context.Context, vt *VirtualTun) er
 			logger.Errorf("SOCKS5 accept error: %v", err)
 			return err
 		}
-		go func(conn net.Conn) {
-			defer func(conn net.Conn) {
-				err := conn.Close()
-				if err != nil && !errors.Is(err, net.ErrClosed) {
-					logger.Errorf("SOCKS5 network connect close failed: %v", err)
-				}
-			}(conn)
-			if err := server.ServeConn(conn); err != nil {
-				if !strings.Contains(err.Error(), "connection reset by peer") &&
-					err != io.EOF &&
-					!strings.Contains(err.Error(), "operation aborted") && // read/write aborts
-					!errors.Is(err, net.ErrClosed) && // Closed connections
-					!errors.Is(err, context.Canceled) { // Context shutdown
-					logger.Errorf("SOCKS5 ServeConn error for %s: %v", conn.RemoteAddr(), err)
-				}
-			}
-		}(conn)
+		// SOCKS4/4a (Windows Internet Options) and SOCKS5 are multiplexed
+		// on this port by peeking the version byte (socks.go).
+		go serveSocksConn(server, dialer, logger, conn)
 	}
 }
 
