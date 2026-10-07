@@ -511,3 +511,39 @@ Addresses = 192.200.144.22:51820`
 		t.Fatal(err)
 	}
 }
+
+func TestParseSocks5AllowSocks4DefaultOff(t *testing.T) {
+	iniData, err := loadIniConfig(`
+[Socks5]
+BindAddress = 127.0.0.1:1080
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spawner, err := parseSocks5Config(iniData.Section("Socks5"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := spawner.(*Socks5Config)
+	if cfg.AllowSocks4 {
+		t.Fatal("AllowSocks4 should default to false")
+	}
+}
+
+func TestParseSocks5AllowSocks4True(t *testing.T) {
+	iniData, err := loadIniConfig(`
+[Socks5]
+BindAddress = 127.0.0.1:1080
+AllowSocks4 = true
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spawner, err := parseSocks5Config(iniData.Section("Socks5"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !spawner.(*Socks5Config).AllowSocks4 {
+		t.Fatal("AllowSocks4 = true not parsed")
+	}
+}

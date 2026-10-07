@@ -26,13 +26,13 @@ type PeerConfig struct {
 }
 
 type ASecConfigType struct {
-	junkPacketCount            int    // Jc
-	junkPacketMinSize          int    // Jmin
-	junkPacketMaxSize          int    // Jmax
-	initPacketJunkSize         int    // s1
-	responsePacketJunkSize     int    // s2
-	cookieReplyPacketJunkSize  int    // s3
-	transportPacketJunkSize    int    // s4
+	junkPacketCount            int     // Jc
+	junkPacketMinSize          int     // Jmin
+	junkPacketMaxSize          int     // Jmax
+	initPacketJunkSize         int     // s1
+	responsePacketJunkSize     int     // s2
+	cookieReplyPacketJunkSize  int     // s3
+	transportPacketJunkSize    int     // s4
 	initPacketMagicHeader      *string // h1
 	responsePacketMagicHeader  *string // h2
 	underloadPacketMagicHeader *string // h3
@@ -97,6 +97,9 @@ type Socks5Config struct {
 	BindAddress string
 	Username    string
 	Password    string
+	// AllowSocks4 accepts SOCKS4/4a on the same port (WinINET). Off by
+	// default. Ignored when Username/Password are set; SOCKS4 has no auth.
+	AllowSocks4 bool
 }
 
 type HTTPConfig struct {
@@ -737,6 +740,14 @@ func parseSocks5Config(section *ini.Section) (RoutineSpawner, error) {
 
 	password, _ := parseString(section, "Password")
 	config.Password = password
+
+	if raw, _ := parseString(section, "AllowSocks4"); raw != "" {
+		allow, err := strconv.ParseBool(raw)
+		if err != nil {
+			return nil, fmt.Errorf("AllowSocks4: %w", err)
+		}
+		config.AllowSocks4 = allow
+	}
 
 	return config, nil
 }

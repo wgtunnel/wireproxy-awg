@@ -16,6 +16,7 @@ import (
 
 	srand "crypto/rand"
 
+	"github.com/amnezia-vpn/amneziawg-go/v3/device"
 	"github.com/things-go/go-socks5"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
@@ -244,9 +245,26 @@ func (config *Socks5Config) SpawnRoutine(ctx context.Context, vt *VirtualTun) er
 			logger.Errorf("SOCKS5 accept error: %v", err)
 			return err
 		}
-		// SOCKS4/4a (Windows Internet Options) and SOCKS5 are multiplexed
-		// on this port by peeking the version byte (socks.go).
-		go serveSocksConn(server, dialer, logger, conn)
+		go config.serveAccepted(server, dialer, logger, conn)
+	}
+}
+
+func (config *Socks5Config) serveAccepted(server *socks5.Server, dialer *tunDialer, logger *device.Logger, conn net.Conn) {
+	if config.AllowSocks4 {
+		if config.Username != "" || config.Password != "" {
+			logger.Verbosef("SOCKS4 enabled but auth is set; SOCKS4 has no password, serving SOCKS5 only")
+		} else {
+			serveSocksConn(server, dialer, logger, conn)
+			return
+		}
+	}
+	defer func() {
+		if err := conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			logger.Errorf("SOCKS5 network connect close failed: %v", err)
+		}
+	}()
+	if err := server.ServeConn(conn); err != nil && !isBenignConnError(err) {
+		logger.Errorf("SOCKS5 ServeConn error for %s: %v", conn.RemoteAddr(), err)
 	}
 }
 

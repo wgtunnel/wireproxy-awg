@@ -27,8 +27,11 @@ const dnsUDPBufSize = 4096
 // Resolve resolves a hostname using DNS over the virtual tunnel interface.
 // It prefers IPv4 (A records), but falls back to IPv6 (AAAA) if no A is found.
 func (r *TUNResolver) Resolve(ctx context.Context, name string) (context.Context, net.IP, error) {
-	if r.vt == nil || len(r.vt.Conf.DNS) == 0 {
+	if r.vt == nil || r.vt.Conf == nil {
 		return ctx, nil, errors.New("no DNS servers configured")
+	}
+	if len(r.vt.Conf.DNS) == 0 {
+		return r.resolveSystem(ctx, name)
 	}
 
 	dnsServer := r.vt.Conf.DNS[0].String()
@@ -69,6 +72,29 @@ func (r *TUNResolver) Resolve(ctx context.Context, name string) (context.Context
 	}
 
 	return ctx, nil, errors.New("no A or AAAA records found after trying search domains")
+}
+
+// resolveSystem uses the OS resolver (underlay / "local" FakeDNS transport)
+// when the tunnel config has no DNS servers. Prefer A, then AAAA.
+func (r *TUNResolver) resolveSystem(ctx context.Context, name string) (context.Context, net.IP, error) {
+	host := strings.TrimSuffix(name, ".")
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip4", host)
+	if err == nil {
+		for _, ip := range ips {
+			if ip != nil {
+				return ctx, ip, nil
+			}
+		}
+	}
+	ips, err = net.DefaultResolver.LookupIP(ctx, "ip6", host)
+	if err == nil {
+		for _, ip := range ips {
+			if ip != nil {
+				return ctx, ip, nil
+			}
+		}
+	}
+	return ctx, nil, errors.New("no A or AAAA records found via system DNS")
 }
 
 // queryDNS sends a DNS query of the specified type and returns the first matching IP.
