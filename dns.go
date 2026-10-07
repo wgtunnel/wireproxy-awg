@@ -16,6 +16,14 @@ type TUNResolver struct {
 	vt *VirtualTun
 }
 
+// dnsUDPBufSize is the EDNS0 requestor's buffer size advertised in queries
+// and the size of the buffer replies are read into. Queries historically
+// carried no OPT record, so upstreams capped replies at the 512-byte legacy
+// limit (RFC 1035), and replies were read into a fixed 512-byte buffer that
+// silently truncated anything larger. Replies for CNAME-heavy domains
+// routinely exceed 512 bytes and failed to unmarshal on every lookup.
+const dnsUDPBufSize = 4096
+
 // Resolve resolves a hostname using DNS over the virtual tunnel interface.
 // It prefers IPv4 (A records), but falls back to IPv6 (AAAA) if no A is found.
 func (r *TUNResolver) Resolve(ctx context.Context, name string) (context.Context, net.IP, error) {
@@ -75,6 +83,9 @@ func (r *TUNResolver) queryDNS(ctx context.Context, dnsServer, name string, qtyp
 	msg.SetQuestion(name, qtype)
 	msg.RecursionDesired = true
 	msg.Id = uint16(rand.Intn(65536))
+	// Advertise an EDNS0 buffer so upstreams may send replies larger than
+	// the 512-byte legacy limit instead of truncating them (RFC 6891).
+	msg.SetEdns0(dnsUDPBufSize, false)
 
 	query, err := msg.Pack()
 	if err != nil {
@@ -87,7 +98,9 @@ func (r *TUNResolver) queryDNS(ctx context.Context, dnsServer, name string, qtyp
 		return nil, err
 	}
 
-	buf := make([]byte, 512)
+	// Read the full reply: the advertised EDNS0 buffer allows replies up to
+	// dnsUDPBufSize, and UDP reads discard anything beyond the buffer.
+	buf := make([]byte, dnsUDPBufSize)
 	n, err := conn.Read(buf)
 	if err != nil {
 		return nil, err
@@ -96,6 +109,10 @@ func (r *TUNResolver) queryDNS(ctx context.Context, dnsServer, name string, qtyp
 	resp := new(dns.Msg)
 	if err := resp.Unpack(buf[:n]); err != nil {
 		return nil, err
+	}
+
+	if resp.Id != msg.Id {
+		return nil, errors.New("mismatched DNS response ID")
 	}
 
 	for _, ans := range resp.Answer {

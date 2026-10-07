@@ -6,164 +6,53 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
-	"sync"
+	"time"
 
 	"github.com/amnezia-vpn/amneziawg-go/v3/device"
 )
 
-const proxyAuthHeaderKey = "Proxy-Authorization"
-
+// HTTPServer is a forward proxy serving plain HTTP and HTTPS CONNECT.
+//
+// The previous implementation handled only GET and CONNECT, answered every
+// other method with 405, closed the connection after a single response
+// (breaking keep-alive), answered bad credentials with 401 (WinINET only
+// understands 407 for proxy auth), and relayed through the raw conn while
+// discarding bytes already buffered in its bufio.Reader. Windows clients
+// (WinINET/WinHTTP) reuse connections and send POST/HEAD/OPTIONS requests,
+// so they surfaced "connection closed" errors even though one-shot curl
+// requests worked. This implementation supports all methods, keep-alive,
+// hop-by-hop header stripping, and never loses buffered client bytes.
 type HTTPServer struct {
 	config *HTTPConfig
 
-	auth CredentialValidator
 	dial func(network, address string) (net.Conn, error)
 
+	auth         CredentialValidator
 	logger       *device.Logger
 	authRequired bool
 }
 
-func (s *HTTPServer) authenticate(req *http.Request) (int, error) {
-	if !s.authRequired {
-		return 0, nil
-	}
+const httpIdleTimeout = 5 * time.Minute
 
-	auth := req.Header.Get(proxyAuthHeaderKey)
-	if auth == "" {
-		return http.StatusProxyAuthRequired, fmt.Errorf("%s", http.StatusText(http.StatusProxyAuthRequired))
-	}
-
-	enc := strings.TrimPrefix(auth, "Basic ")
-	str, err := base64.StdEncoding.DecodeString(enc)
-	if err != nil {
-		return http.StatusNotAcceptable, fmt.Errorf("decode username and password failed: %w", err)
-	}
-	pairs := bytes.SplitN(str, []byte(":"), 2)
-	if len(pairs) != 2 {
-		return http.StatusLengthRequired, fmt.Errorf("username and password format invalid")
-	}
-	if s.auth.Valid(string(pairs[0]), string(pairs[1])) {
-		return 0, nil
-	}
-	return http.StatusUnauthorized, fmt.Errorf("username and password not matching")
+var httpHopByHopHeaders = []string{
+	"Connection",
+	"Proxy-Connection",
+	"Keep-Alive",
+	"Proxy-Authenticate",
+	"Proxy-Authorization",
+	"Te",
+	"Trailer",
+	"Transfer-Encoding",
+	"Upgrade",
 }
 
-func (s *HTTPServer) handleConn(req *http.Request, conn net.Conn) (peer net.Conn, err error) {
-	addr := req.Host
-	if !strings.Contains(addr, ":") {
-		port := "443"
-		addr = net.JoinHostPort(addr, port)
-	}
-
-	peer, err = s.dial("tcp", addr)
-	if err != nil {
-		return peer, fmt.Errorf("tun tcp dial failed: %w", err)
-	}
-
-	_, err = conn.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
-	if err != nil {
-		_ = peer.Close()
-		peer = nil
-	}
-
-	return
-}
-
-func (s *HTTPServer) handle(req *http.Request) (peer net.Conn, err error) {
-	addr := req.Host
-	if !strings.Contains(addr, ":") {
-		port := "80"
-		addr = net.JoinHostPort(addr, port)
-	}
-
-	peer, err = s.dial("tcp", addr)
-	if err != nil {
-		return peer, fmt.Errorf("tun tcp dial failed: %w", err)
-	}
-
-	err = req.Write(peer)
-	if err != nil {
-		_ = peer.Close()
-		peer = nil
-		return peer, fmt.Errorf("conn write failed: %w", err)
-	}
-
-	return
-}
-
-func (s *HTTPServer) serve(conn net.Conn) {
-	var rd = bufio.NewReader(conn)
-	req, err := http.ReadRequest(rd)
-	if err != nil {
-		if !strings.Contains(err.Error(), "connection reset by peer") && err != io.EOF {
-			s.logger.Errorf("HTTP read request failed: %v", err)
-		}
-		return
-	}
-
-	code, err := s.authenticate(req)
-	if err != nil {
-		resp := responseWith(req, code)
-		if code == http.StatusProxyAuthRequired {
-			resp.Header.Set("Proxy-Authenticate", "Basic realm=\"Proxy\"")
-		}
-		_ = resp.Write(conn)
-		s.logger.Errorf("HTTP authentication failed: %v", err)
-		return
-	}
-
-	var peer net.Conn
-	switch req.Method {
-	case http.MethodConnect:
-		peer, err = s.handleConn(req, conn)
-	case http.MethodGet:
-		peer, err = s.handle(req)
-	default:
-		_ = responseWith(req, http.StatusMethodNotAllowed).Write(conn)
-		s.logger.Errorf("HTTP unsupported protocol: %s", req.Method)
-		return
-	}
-	if err != nil {
-		if !strings.Contains(err.Error(), "connection reset by peer") && err != io.EOF {
-			s.logger.Errorf("HTTP handle failed: %v", err)
-		}
-		return
-	}
-	if peer == nil {
-		s.logger.Errorf("HTTP handle failed: peer nil")
-		return
-	}
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	go func() {
-		defer wg.Done()
-		_, err := io.Copy(conn, peer)
-		if err != nil && !strings.Contains(err.Error(), "connection reset by peer") && !strings.Contains(err.Error(), "operation aborted") && err != io.EOF {
-			s.logger.Errorf("HTTP io.Copy (peer to conn) error: %v", err)
-		}
-	}()
-
-	go func() {
-		defer wg.Done()
-		_, err := io.Copy(peer, conn)
-		if err != nil && !strings.Contains(err.Error(), "connection reset by peer") && !strings.Contains(err.Error(), "operation aborted") && err != io.EOF {
-			s.logger.Errorf("HTTP io.Copy (conn to peer) error: %v", err)
-		}
-	}()
-
-	wg.Wait()
-	conn.Close()
-	peer.Close()
-}
-
-// ListenAndServe is used to create a listener and serve on it
+// ListenAndServe creates a listener and serves proxy requests on it until
+// the context is canceled or the listener fails.
 func (s *HTTPServer) ListenAndServe(ctx context.Context, network, addr string) error {
 	listener, err := net.Listen(network, addr)
 	if err != nil {
@@ -172,47 +61,263 @@ func (s *HTTPServer) ListenAndServe(ctx context.Context, network, addr string) e
 	}
 	s.logger.Verbosef("HTTP listener bound successfully on %s", addr)
 
-	errCh := make(chan error, 1)
+	return s.Serve(ctx, listener)
+}
+
+// Serve serves HTTP proxy requests on the given listener.
+// This is useful for testing where the caller wants to control the listener.
+func (s *HTTPServer) Serve(ctx context.Context, listener net.Listener) error {
 	go func() {
-		s.logger.Verbosef("HTTP accept loop started")
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				// Suppress shutdown-related errors
-				if errors.Is(err, net.ErrClosed) || strings.Contains(err.Error(), "use of closed network connection") || errors.Is(err, context.Canceled) {
-					errCh <- nil
-					return
-				}
-				s.logger.Errorf("HTTP accept error: %v", err)
-				errCh <- err
-				return
-			}
-			go func(conn net.Conn) {
-				defer func() {
-					if err := conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-						s.logger.Errorf("HTTP connection close failed: %v", err)
-					}
-				}()
-				s.serve(conn)
-			}(conn)
-		}
+		<-ctx.Done()
+		_ = listener.Close()
 	}()
 
-	select {
-	case err := <-errCh:
-		if closeErr := listener.Close(); closeErr != nil {
-			s.logger.Errorf("HTTP listener close failed: %v", closeErr)
-		}
+	for {
+		conn, err := listener.Accept()
 		if err != nil {
-			s.logger.Errorf("HTTP ListenAndServe error: %v", err)
+			if errors.Is(err, net.ErrClosed) {
+				s.logger.Verbosef("HTTP accept loop exited gracefully on listener close")
+				return nil
+			}
+			s.logger.Errorf("HTTP accept error: %v", err)
+			return err
 		}
-		return err
-	case <-ctx.Done():
-		s.logger.Verbosef("HTTP ListenAndServe context done: %v", ctx.Err())
-		if err := listener.Close(); err != nil {
-			s.logger.Errorf("HTTP listener close failed: %v", err)
-		}
-		<-errCh // Drain to wait for goroutine exit (ignores the triggered accept error)
-		return ctx.Err()
+		go s.serveConn(conn)
 	}
+}
+
+func (s *HTTPServer) serveConn(conn net.Conn) {
+	defer func() { _ = conn.Close() }()
+
+	br := bufio.NewReader(conn)
+	for {
+		_ = conn.SetReadDeadline(time.Now().Add(httpIdleTimeout))
+		req, err := http.ReadRequest(br)
+		if err != nil {
+			return
+		}
+		_ = conn.SetReadDeadline(time.Time{})
+
+		if !s.authorized(req) {
+			// 407 (not 401) is the only proxy auth status WinINET understands.
+			s.writeSimpleResponse(
+				conn,
+				http.StatusProxyAuthRequired,
+				map[string]string{"Proxy-Authenticate": `Basic realm="wireproxy"`},
+			)
+			return
+		}
+
+		if req.Method == http.MethodConnect {
+			s.tunnel(req, conn, br)
+			return
+		}
+
+		if !s.forward(req, conn, br) {
+			return
+		}
+	}
+}
+
+func (s *HTTPServer) authorized(req *http.Request) bool {
+	if !s.authRequired {
+		return true
+	}
+	header := strings.TrimSpace(req.Header.Get("Proxy-Authorization"))
+	parts := strings.Fields(header)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Basic") {
+		return false
+	}
+	raw, err := base64.StdEncoding.DecodeString(parts[1])
+	if err != nil {
+		return false
+	}
+	user, pass, ok := strings.Cut(string(raw), ":")
+	if !ok {
+		return false
+	}
+	return s.auth.Valid(user, pass)
+}
+
+// forward proxies a plain HTTP request to the origin and relays the
+// response. Returns true if the client connection should be reused.
+func (s *HTTPServer) forward(req *http.Request, conn net.Conn, br *bufio.Reader) bool {
+	if req.Host == "" {
+		s.writeSimpleResponse(conn, http.StatusBadRequest, nil)
+		return false
+	}
+	addr := req.Host
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		addr = net.JoinHostPort(addr, "80")
+	}
+
+	peer, err := s.dial("tcp", addr)
+	if err != nil {
+		s.logger.Verbosef("HTTP proxy dial to %s failed: %v", addr, err)
+		s.writeSimpleResponse(conn, http.StatusBadGateway, nil)
+		return false
+	}
+	defer func() { _ = peer.Close() }()
+
+	clientKeepAlive := requestWantsKeepAlive(req)
+	// Protocol upgrades (plain WebSocket over ws://) are negotiated
+	// end-to-end, so Connection/Upgrade must survive hop-by-hop stripping.
+	upgradeValue := req.Header.Get("Upgrade")
+	upgradeRequested :=
+		upgradeValue != "" && strings.Contains(strings.ToLower(req.Header.Get("Connection")), "upgrade")
+	// Expect is hop-by-hop: the client may withhold its body until it is
+	// told to proceed, and the origin never sees Expect once stripped, so
+	// we must answer 100 Continue ourselves — before reading the body.
+	expectContinue := strings.EqualFold(req.Header.Get("Expect"), "100-continue")
+
+	// Hop-by-hop (proxy) headers must not leak to origin servers.
+	stripHopByHopHeaders(req.Header)
+
+	if upgradeRequested {
+		req.Header.Set("Connection", "Upgrade")
+		req.Header.Set("Upgrade", upgradeValue)
+	}
+	if expectContinue {
+		if _, err = io.WriteString(conn, "HTTP/1.1 100 Continue\r\n\r\n"); err != nil {
+			return false
+		}
+	}
+
+	// req.Write streams the request body as it reads; large uploads are
+	// never buffered in full.
+	if err = req.Write(peer); err != nil {
+		return false
+	}
+	copyThenClose(io.Discard, req.Body, req.Body)
+
+	resp, err := http.ReadResponse(bufio.NewReader(peer), req)
+	if err != nil {
+		return false
+	}
+	defer copyThenClose(io.Discard, resp.Body, resp.Body)
+
+	// A 101 response switches the connection to an opaque tunnel (e.g.
+	// WebSocket). Connection/Upgrade headers must reach the client
+	// verbatim, then the two sides are relayed bidirectionally.
+	if resp.StatusCode == http.StatusSwitchingProtocols {
+		if err = resp.Write(conn); err != nil {
+			return false
+		}
+		s.relay(conn, peer, br)
+		return false
+	}
+
+	keepAlive := clientKeepAlive && !resp.Close
+	// Connection/framing headers are regenerated by resp.Write for the
+	// client.
+	resp.Header.Del("Connection")
+	resp.Header.Del("Keep-Alive")
+	resp.Header.Del("Proxy-Connection")
+	resp.Header.Del("Transfer-Encoding")
+
+	if resp.ContentLength < 0 && !req.ProtoAtLeast(1, 1) {
+		// WinINET defaults to HTTP/1.0 through proxies ("Use HTTP 1.1
+		// through proxy connections" is off by default), and chunked
+		// responses are invalid for 1.0 clients. Re-frame as
+		// close-delimited so streaming bodies (SSE, long-polling,
+		// open-ended downloads) are forwarded as they arrive instead of
+		// being buffered; the connection closes when the origin stream
+		// ends.
+		resp.TransferEncoding = nil
+		resp.Close = true
+		keepAlive = false
+	} else {
+		resp.Close = !keepAlive
+	}
+
+	// resp.Write streams the body as it arrives from the origin (never
+	// buffered in full), so SSE events and other streamed chunks reach
+	// the client as soon as the origin sends them.
+	if err = resp.Write(conn); err != nil {
+		return false
+	}
+	return keepAlive
+}
+
+// tunnel relays a CONNECT request bidirectionally.
+func (s *HTTPServer) tunnel(req *http.Request, conn net.Conn, br *bufio.Reader) {
+	addr := req.Host
+	if addr == "" {
+		addr = req.URL.Host
+	}
+	if addr == "" {
+		s.writeSimpleResponse(conn, http.StatusBadRequest, nil)
+		return
+	}
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		addr = net.JoinHostPort(addr, "443")
+	}
+
+	peer, err := s.dial("tcp", addr)
+	if err != nil {
+		s.logger.Verbosef("HTTP CONNECT to %s failed: %v", addr, err)
+		s.writeSimpleResponse(conn, http.StatusBadGateway, nil)
+		return
+	}
+	defer func() { _ = peer.Close() }()
+
+	if _, err = io.WriteString(conn, "HTTP/1.1 200 Connection established\r\nContent-Length: 0\r\n\r\n"); err != nil {
+		return
+	}
+
+	s.relay(conn, peer, br)
+}
+
+// relay copies bidirectionally between the client and the origin after a
+// CONNECT or a protocol upgrade. Bytes already buffered in br (read past
+// the request headers) are delivered first so nothing is lost. Both
+// directions copy through the shared 64KB buffer pool (see pool.go);
+// passing br and conn as separate sources avoids allocating an
+// io.MultiReader per relayed connection.
+func (s *HTTPServer) relay(conn net.Conn, peer net.Conn, br *bufio.Reader) {
+	go copyThenClose(peer, peer, br, conn)
+	_ = copyBuffer(conn, peer)
+}
+
+func (s *HTTPServer) writeSimpleResponse(conn net.Conn, code int, extraHeaders map[string]string) {
+	var buf bytes.Buffer
+	buf.Grow(256)
+	buf.WriteString("HTTP/1.1 ")
+	buf.WriteString(strconv.Itoa(code))
+	buf.WriteString(" ")
+	buf.WriteString(http.StatusText(code))
+	buf.WriteString("\r\n")
+	for k, v := range extraHeaders {
+		buf.WriteString(k)
+		buf.WriteString(": ")
+		buf.WriteString(v)
+		buf.WriteString("\r\n")
+	}
+	buf.WriteString("Content-Length: 0\r\nConnection: close\r\n\r\n")
+
+	buf.WriteTo(conn)
+}
+
+func requestWantsKeepAlive(req *http.Request) bool {
+	connection := strings.ToLower(req.Header.Get("Connection"))
+	if strings.Contains(connection, "close") {
+		return false
+	}
+	if req.ProtoAtLeast(1, 1) {
+		return true
+	}
+	// HTTP/1.0 clients must opt in explicitly.
+	return strings.Contains(connection, "keep-alive")
+}
+
+func stripHopByHopHeaders(h http.Header) {
+	if c := h.Get("Connection"); c != "" {
+		for _, token := range strings.Split(c, ",") {
+			h.Del(strings.TrimSpace(token))
+		}
+	}
+	for _, k := range httpHopByHopHeaders {
+		h.Del(k)
+	}
+	h.Del("Expect")
 }
