@@ -14,15 +14,18 @@ import (
 // TUNResolver forwards DNS resolution through the tunnel
 type TUNResolver struct {
 	vt *VirtualTun
+	// dialContext, when set, is used instead of vt.Tnet (tests).
+	dialContext func(ctx context.Context, network, address string) (net.Conn, error)
 }
 
-// dnsUDPBufSize is the EDNS0 requestor's buffer size advertised in queries
-// and the size of the buffer replies are read into. Queries historically
-// carried no OPT record, so upstreams capped replies at the 512-byte legacy
-// limit (RFC 1035), and replies were read into a fixed 512-byte buffer that
-// silently truncated anything larger. Replies for CNAME-heavy domains
-// routinely exceed 512 bytes and failed to unmarshal on every lookup.
-const dnsUDPBufSize = 4096
+// defaultEDNSSize fits an IPv6 datagram on a 1280-byte path (typical WG inner MTU).
+const defaultEDNSSize = 1232
+
+// dnsUDPReadSize is the UDP receive buffer. It is larger than the advertised
+// EDNS payload so a non-compliant server that still sends more is not sliced.
+const dnsUDPReadSize = 4096
+
+const dnsQueryTimeout = 5 * time.Second
 
 // Resolve resolves a hostname using DNS over the virtual tunnel interface.
 // It prefers IPv4 (A records), but falls back to IPv6 (AAAA) if no A is found.
@@ -97,58 +100,115 @@ func (r *TUNResolver) resolveSystem(ctx context.Context, name string) (context.C
 	return ctx, nil, errors.New("no A or AAAA records found via system DNS")
 }
 
+func ednsSizeForMTU(mtu int) uint16 {
+	if mtu <= 0 {
+		return defaultEDNSSize
+	}
+	n := mtu - 48 // IPv6 header + UDP
+	if n > defaultEDNSSize {
+		n = defaultEDNSSize
+	}
+	if n < dns.MinMsgSize {
+		n = dns.MinMsgSize
+	}
+	return uint16(n)
+}
+
+func (r *TUNResolver) ednsSize() uint16 {
+	mtu := 0
+	if r != nil && r.vt != nil && r.vt.Conf != nil {
+		mtu = r.vt.Conf.MTU
+	}
+	return ednsSizeForMTU(mtu)
+}
+
+func (r *TUNResolver) dial(ctx context.Context, network, address string) (net.Conn, error) {
+	if r.dialContext != nil {
+		return r.dialContext(ctx, network, address)
+	}
+	if r.vt == nil || r.vt.Tnet == nil {
+		return nil, errors.New("no tunnel network")
+	}
+	return r.vt.Tnet.DialContext(ctx, network, address)
+}
+
 // queryDNS sends a DNS query of the specified type and returns the first matching IP.
+// UDP first with a path-sized EDNS0 OPT; TCP if the UDP reply is truncated,
+// unparseable, or has no A/AAAA.
 func (r *TUNResolver) queryDNS(ctx context.Context, dnsServer, name string, qtype uint16) (net.IP, error) {
-	conn, err := r.vt.Tnet.DialContext(ctx, "udp", dnsServer)
+	msg := new(dns.Msg)
+	msg.SetQuestion(name, qtype)
+	msg.RecursionDesired = true
+	msg.Id = uint16(rand.Intn(65536))
+	msg.SetEdns0(r.ednsSize(), false)
+
+	resp, err := r.roundTrip(ctx, "udp", dnsServer, msg)
+	ip := firstIP(resp, qtype)
+	if err == nil && ip != nil && (resp == nil || !resp.Truncated) {
+		return ip, nil
+	}
+	if err != nil && resp == nil {
+		return nil, err
+	}
+
+	tcpResp, tcpErr := r.roundTrip(ctx, "tcp", dnsServer, msg)
+	if tcpIP := firstIP(tcpResp, qtype); tcpErr == nil && tcpIP != nil {
+		return tcpIP, nil
+	}
+	if ip != nil {
+		return ip, nil
+	}
+	if tcpErr != nil {
+		return nil, tcpErr
+	}
+	if err != nil {
+		return nil, err
+	}
+	return nil, errors.New("no matching DNS records found")
+}
+
+func (r *TUNResolver) roundTrip(ctx context.Context, network, server string, msg *dns.Msg) (*dns.Msg, error) {
+	conn, err := r.dial(ctx, network, server)
 	if err != nil {
 		return nil, err
 	}
 	defer conn.Close()
 
-	msg := new(dns.Msg)
-	msg.SetQuestion(name, qtype)
-	msg.RecursionDesired = true
-	msg.Id = uint16(rand.Intn(65536))
-	// Advertise an EDNS0 buffer so upstreams may send replies larger than
-	// the 512-byte legacy limit instead of truncating them (RFC 6891).
-	msg.SetEdns0(dnsUDPBufSize, false)
+	deadline := time.Now().Add(dnsQueryTimeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	_ = conn.SetDeadline(deadline)
 
-	query, err := msg.Pack()
-	if err != nil {
+	c := &dns.Conn{Conn: conn}
+	if network == "udp" || network == "udp4" || network == "udp6" {
+		c.UDPSize = dnsUDPReadSize
+	}
+	if err := c.WriteMsg(msg); err != nil {
 		return nil, err
 	}
-
-	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-	_, err = conn.Write(query)
-	if err != nil {
-		return nil, err
+	resp, err := c.ReadMsg()
+	if resp != nil && resp.Id != msg.Id {
+		return resp, errors.New("mismatched DNS response ID")
 	}
+	return resp, err
+}
 
-	// Read the full reply: the advertised EDNS0 buffer allows replies up to
-	// dnsUDPBufSize, and UDP reads discard anything beyond the buffer.
-	buf := make([]byte, dnsUDPBufSize)
-	n, err := conn.Read(buf)
-	if err != nil {
-		return nil, err
+func firstIP(resp *dns.Msg, qtype uint16) net.IP {
+	if resp == nil {
+		return nil
 	}
-
-	resp := new(dns.Msg)
-	if err := resp.Unpack(buf[:n]); err != nil {
-		return nil, err
-	}
-
-	if resp.Id != msg.Id {
-		return nil, errors.New("mismatched DNS response ID")
-	}
-
 	for _, ans := range resp.Answer {
-		switch rr := ans.(type) {
-		case *dns.A:
-			return rr.A, nil
-		case *dns.AAAA:
-			return rr.AAAA, nil
+		switch qtype {
+		case dns.TypeA:
+			if a, ok := ans.(*dns.A); ok {
+				return a.A
+			}
+		case dns.TypeAAAA:
+			if aaaa, ok := ans.(*dns.AAAA); ok {
+				return aaaa.AAAA
+			}
 		}
 	}
-
-	return nil, errors.New("no matching DNS records found")
+	return nil
 }
