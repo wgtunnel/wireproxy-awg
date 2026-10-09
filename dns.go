@@ -3,6 +3,7 @@ package wireproxy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand"
 	"net"
 	"strings"
@@ -37,11 +38,6 @@ func (r *TUNResolver) Resolve(ctx context.Context, name string) (context.Context
 		return r.resolveSystem(ctx, name)
 	}
 
-	dnsServer := r.vt.Conf.DNS[0].String()
-	if !strings.Contains(dnsServer, ":") {
-		dnsServer += ":53"
-	}
-
 	// Normalize: ensure trailing dot for absolute queries
 	originalName := name
 	if !strings.HasSuffix(name, ".") {
@@ -58,22 +54,41 @@ func (r *TUNResolver) Resolve(ctx context.Context, name string) (context.Context
 	}
 	namesToQuery = append(namesToQuery, name) // Fallback to original
 
-	// Prefer A (IPv4)
-	for _, qname := range namesToQuery {
-		ip, err := r.queryDNS(ctx, dnsServer, qname, dns.TypeA)
-		if err == nil && ip != nil {
-			return ctx, ip, nil
+	// Try each configured DNS server in order so a down/unreachable server
+	// falls back to the next one instead of failing
+	var lastErr error
+	for _, server := range r.vt.Conf.DNS {
+		dnsServer := net.JoinHostPort(server.String(), "53")
+
+		// Prefer A (IPv4)
+		for _, qname := range namesToQuery {
+			ip, err := r.queryDNS(ctx, dnsServer, qname, dns.TypeA)
+			if err == nil && ip != nil {
+				return ctx, ip, nil
+			}
+			if err != nil {
+				lastErr = err
+			}
+		}
+
+		// Fallback to AAAA (IPv6)
+		for _, qname := range namesToQuery {
+			ip, err := r.queryDNS(ctx, dnsServer, qname, dns.TypeAAAA)
+			if err == nil && ip != nil {
+				return ctx, ip, nil
+			}
+			if err != nil {
+				lastErr = err
+			}
 		}
 	}
 
-	// Fallback to AAAA (IPv6)
-	for _, qname := range namesToQuery {
-		ip, err := r.queryDNS(ctx, dnsServer, qname, dns.TypeAAAA)
-		if err == nil && ip != nil {
-			return ctx, ip, nil
-		}
+	if lastErr != nil {
+		return ctx, nil, fmt.Errorf(
+			"no A or AAAA records found after trying %d DNS server(s): %w",
+			len(r.vt.Conf.DNS), lastErr,
+		)
 	}
-
 	return ctx, nil, errors.New("no A or AAAA records found after trying search domains")
 }
 
