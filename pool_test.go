@@ -9,8 +9,8 @@ import (
 
 func TestBufPoolGetPut(t *testing.T) {
 	b := buffers.Get()
-	if cap(b) != bufSize {
-		t.Fatalf("cap=%d want %d", cap(b), bufSize)
+	if len(b) != bufSize || cap(b) != bufSize {
+		t.Fatalf("len=%d cap=%d want %d", len(b), cap(b), bufSize)
 	}
 	buffers.Put(b)
 
@@ -20,6 +20,31 @@ func TestBufPoolGetPut(t *testing.T) {
 		t.Fatalf("cap=%d want %d", cap(b2), bufSize)
 	}
 	buffers.Put(b2)
+}
+
+func TestSocksBufPoolAppendsAtStart(t *testing.T) {
+	b := socksBuffers.Get()
+	if len(b) != 0 || cap(b) != bufSize {
+		t.Fatalf("len=%d cap=%d want 0, %d", len(b), cap(b), bufSize)
+	}
+	// Same construction as go-socks5 UDP ASSOCIATE replies.
+	header := []byte{0, 0, 0, 1, 1, 2, 3, 4, 0, 53}
+	payload := []byte{0xab, 0xcd}
+	out := append(append(b, header...), payload...)
+	if len(out) != len(header)+len(payload) {
+		t.Fatalf("datagram len=%d want %d", len(out), len(header)+len(payload))
+	}
+	if len(out) > 65535 {
+		t.Fatalf("datagram %d exceeds a UDP packet", len(out))
+	}
+	socksBuffers.Put(b)
+
+	// The backing array goes back to the relay pool at full length.
+	relay := buffers.Get()
+	if len(relay) != bufSize {
+		t.Fatalf("relay len=%d want %d", len(relay), bufSize)
+	}
+	buffers.Put(relay)
 }
 
 func TestBufPoolPutDropsForeignBuffer(t *testing.T) {

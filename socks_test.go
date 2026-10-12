@@ -239,6 +239,91 @@ func TestSOCKS5ServerIntegration(t *testing.T) {
 	}
 }
 
+func TestSOCKS5UDPAssociateEcho(t *testing.T) {
+	echo, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer echo.Close()
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			n, addr, err := echo.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			_, _ = echo.WriteTo(buf[:n], addr)
+		}
+	}()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	server := socks5.NewServer(
+		socks5.WithBufferPool(socksBuffers),
+		socks5.WithAuthMethods([]socks5.Authenticator{socks5.NoAuthAuthenticator{}}),
+		socks5.WithDial(func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return net.Dial(network, echo.LocalAddr().String())
+		}),
+	)
+	go server.Serve(ln)
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+
+	if _, err := conn.Write([]byte{0x05, 0x01, 0x00}); err != nil {
+		t.Fatal(err)
+	}
+	greet := make([]byte, 2)
+	if _, err := io.ReadFull(conn, greet); err != nil {
+		t.Fatal(err)
+	}
+	// ASSOCIATE, destination 0.0.0.0:0 so any client UDP source is accepted.
+	if _, err := conn.Write([]byte{0x05, 0x03, 0x00, 0x01, 0, 0, 0, 0, 0, 0}); err != nil {
+		t.Fatal(err)
+	}
+	rep := make([]byte, 10)
+	if _, err := io.ReadFull(conn, rep); err != nil {
+		t.Fatal(err)
+	}
+	if rep[0] != 0x05 || rep[1] != 0x00 || rep[3] != 0x01 {
+		t.Fatalf("associate reply %v", rep)
+	}
+	bnd := &net.UDPAddr{IP: net.IP(rep[4:8]), Port: int(rep[8])<<8 | int(rep[9])}
+
+	client, err := net.DialUDP("udp", nil, bnd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	_ = client.SetDeadline(time.Now().Add(2 * time.Second))
+
+	payload := []byte("dns-answer")
+	// RSV, FRAG, ATYP IPv4, 1.2.3.4:53, then the payload.
+	req := []byte{0, 0, 0, 1, 1, 2, 3, 4, 0, 53}
+	req = append(req, payload...)
+	if _, err := client.Write(req); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, 2048)
+	n, err := client.Read(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != len(req) {
+		t.Fatalf("reply len=%d want %d (a 64KB prefix would not fit in one UDP packet)", n, len(req))
+	}
+	if !bytes.Equal(got[:n], req) {
+		t.Fatalf("reply %x want %x", got[:n], req)
+	}
+}
+
 func TestRelayWithCopyThenClose(t *testing.T) {
 	// Test that copyThenClose correctly chains multiple sources and closes
 	// Test 1: copyThenClose with multiple sources

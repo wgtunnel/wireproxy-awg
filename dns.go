@@ -54,42 +54,75 @@ func (r *TUNResolver) Resolve(ctx context.Context, name string) (context.Context
 	}
 	namesToQuery = append(namesToQuery, name) // Fallback to original
 
+	// Query A before AAAA by default, but flip the order on a v6-only tunnel:
+	// an A answer would be undialable there anyway, so asking for it first
+	// would just cost a wasted round trip on every single lookup.
+	qtypes := [2]uint16{dns.TypeA, dns.TypeAAAA}
+	if r.preferAAAAFirst() {
+		qtypes[0], qtypes[1] = dns.TypeAAAA, dns.TypeA
+	}
+
 	// Try each configured DNS server in order so a down/unreachable server
 	// falls back to the next one instead of failing
 	var lastErr error
 	for _, server := range r.vt.Conf.DNS {
 		dnsServer := net.JoinHostPort(server.String(), "53")
 
-		// Prefer A (IPv4)
-		for _, qname := range namesToQuery {
-			ip, err := r.queryDNS(ctx, dnsServer, qname, dns.TypeA)
-			if err == nil && ip != nil {
-				return ctx, ip, nil
-			}
-			if err != nil {
-				lastErr = err
-			}
-		}
-
-		// Fallback to AAAA (IPv6)
-		for _, qname := range namesToQuery {
-			ip, err := r.queryDNS(ctx, dnsServer, qname, dns.TypeAAAA)
-			if err == nil && ip != nil {
-				return ctx, ip, nil
-			}
-			if err != nil {
-				lastErr = err
+		for _, qtype := range qtypes {
+			for _, qname := range namesToQuery {
+				ip, err := r.queryDNS(ctx, dnsServer, qname, qtype)
+				if err == nil && ip != nil {
+					r.logVerbosef("dns: resolved name=%s -> %s via %s", name, ip, dnsServer)
+					return ctx, ip, nil
+				}
+				if err != nil {
+					lastErr = err
+				}
 			}
 		}
 	}
 
 	if lastErr != nil {
-		return ctx, nil, fmt.Errorf(
+		err := fmt.Errorf(
 			"no A or AAAA records found after trying %d DNS server(s): %w",
 			len(r.vt.Conf.DNS), lastErr,
 		)
+		r.logErrorf("dns: failed to resolve name=%s: %v", name, err)
+		return ctx, nil, err
 	}
-	return ctx, nil, errors.New("no A or AAAA records found after trying search domains")
+	err := errors.New("no A or AAAA records found after trying search domains")
+	r.logErrorf("dns: failed to resolve name=%s: %v", name, err)
+	return ctx, nil, err
+}
+
+func (r *TUNResolver) logVerbosef(format string, args ...any) {
+	if r.vt != nil && r.vt.Logger != nil && r.vt.Logger.Verbosef != nil {
+		r.vt.Logger.Verbosef(format, args...)
+	}
+}
+
+func (r *TUNResolver) logErrorf(format string, args ...any) {
+	if r.vt != nil && r.vt.Logger != nil && r.vt.Logger.Errorf != nil {
+		r.vt.Logger.Errorf(format, args...)
+	}
+}
+
+// preferAAAAFirst reports whether to query AAAA before A. Only true when the
+// tunnel interface has an IPv6 address and no IPv4 address of its own.
+func (r *TUNResolver) preferAAAAFirst() bool {
+	if r.vt == nil || r.vt.Conf == nil {
+		return false
+	}
+	hasV4, hasV6 := false, false
+	for _, a := range r.vt.Conf.Address {
+		switch {
+		case a.Is4() || a.Is4In6():
+			hasV4 = true
+		case a.Is6():
+			hasV6 = true
+		}
+	}
+	return hasV6 && !hasV4
 }
 
 // resolveSystem uses the OS resolver (underlay / "local" FakeDNS transport)
@@ -112,7 +145,9 @@ func (r *TUNResolver) resolveSystem(ctx context.Context, name string) (context.C
 			}
 		}
 	}
-	return ctx, nil, errors.New("no A or AAAA records found via system DNS")
+	resolveErr := errors.New("no A or AAAA records found via system DNS")
+	r.logErrorf("dns: failed to resolve name=%s: %v", name, resolveErr)
+	return ctx, nil, resolveErr
 }
 
 func ednsSizeForMTU(mtu int) uint16 {

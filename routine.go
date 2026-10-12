@@ -214,9 +214,9 @@ func (config *Socks5Config) SpawnRoutine(ctx context.Context, vt *VirtualTun) er
 		socks5.WithDial(dialer.DialContext),
 		socks5.WithResolver(dialer.resolver),
 		socks5.WithAuthMethods(authMethods),
-		// go-socks5's BufPool interface is satisfied by the shared 64KB
-		// pool every relay path uses (see pool.go) — one pool total.
-		socks5.WithBufferPool(&buffers)}
+		// UDP replies are appended onto the slice, so SOCKS gets the
+		// zero-length view of the shared pool
+		socks5.WithBufferPool(socksBuffers)}
 
 	server := socks5.NewServer(options...)
 	logger.Verbosef("SOCKS5 server object created")
@@ -245,6 +245,7 @@ func (config *Socks5Config) SpawnRoutine(ctx context.Context, vt *VirtualTun) er
 			logger.Errorf("SOCKS5 accept error: %v", err)
 			return err
 		}
+		logger.Verbosef("SOCKS5 accepted connection from %s", conn.RemoteAddr())
 		go config.serveAccepted(server, dialer, logger, conn)
 	}
 }
