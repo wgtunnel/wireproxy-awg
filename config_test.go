@@ -3,7 +3,7 @@ package wireproxy
 import (
 	"testing"
 
-	"github.com/go-ini/ini"
+	"gopkg.in/ini.v1"
 )
 
 func loadIniConfig(config string) (*ini.File, error) {

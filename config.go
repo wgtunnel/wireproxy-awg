@@ -14,7 +14,7 @@ import (
 	"net/netip"
 
 	"github.com/MakeNowJust/heredoc/v2"
-	"github.com/go-ini/ini"
+	"gopkg.in/ini.v1"
 )
 
 type PeerConfig struct {
