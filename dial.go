@@ -26,14 +26,9 @@ func (d *tunDialer) DialContext(ctx context.Context, network, address string) (n
 		return nil, err
 	}
 
-	if ip := net.ParseIP(host); ip != nil {
-		// Prefer IPv4 for literal IPv6 destinations when an A record exists.
-		if ip.To4() == nil {
-			if _, ipv4Addr, resolveErr := d.resolver.Resolve(ctx, host); resolveErr == nil && ipv4Addr.To4() != nil {
-				address = net.JoinHostPort(ipv4Addr.String(), port)
-			}
-		}
-	} else {
+	// A literal IP is dialed as given. Looking one up in DNS only ever returns
+	// NXDOMAIN, and a client that sent an IPv6 literal chose IPv6.
+	if net.ParseIP(host) == nil {
 		// Domain name: resolve using the TUN resolver.
 		_, resolvedIP, resolveErr := d.resolver.Resolve(ctx, host)
 		if resolveErr != nil {

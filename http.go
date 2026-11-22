@@ -146,10 +146,7 @@ func (s *HTTPServer) forward(req *http.Request, conn net.Conn, br *bufio.Reader)
 		s.writeSimpleResponse(conn, http.StatusBadRequest, nil)
 		return false
 	}
-	addr := req.Host
-	if _, _, err := net.SplitHostPort(addr); err != nil {
-		addr = net.JoinHostPort(addr, "80")
-	}
+	addr := withDefaultPort(req.Host, "80")
 
 	peer, err := s.dial("tcp", addr)
 	if err != nil {
@@ -249,9 +246,7 @@ func (s *HTTPServer) tunnel(req *http.Request, conn net.Conn, br *bufio.Reader) 
 		s.writeSimpleResponse(conn, http.StatusBadRequest, nil)
 		return
 	}
-	if _, _, err := net.SplitHostPort(addr); err != nil {
-		addr = net.JoinHostPort(addr, "443")
-	}
+	addr = withDefaultPort(addr, "443")
 
 	peer, err := s.dial("tcp", addr)
 	if err != nil {
@@ -320,4 +315,14 @@ func stripHopByHopHeaders(h http.Header) {
 		h.Del(k)
 	}
 	h.Del("Expect")
+}
+
+// withDefaultPort adds port to a host that has none. An IPv6 host arrives in
+// brackets ("[2001:db8::1]"), which JoinHostPort would bracket a second time.
+func withDefaultPort(hostport, port string) string {
+	if _, _, err := net.SplitHostPort(hostport); err == nil {
+		return hostport
+	}
+	host := strings.TrimSuffix(strings.TrimPrefix(hostport, "["), "]")
+	return net.JoinHostPort(host, port)
 }

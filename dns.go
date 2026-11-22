@@ -183,8 +183,10 @@ func (r *TUNResolver) dial(ctx context.Context, network, address string) (net.Co
 }
 
 // queryDNS sends a DNS query of the specified type and returns the first matching IP.
-// UDP first with a path-sized EDNS0 OPT; TCP if the UDP reply is truncated,
-// unparseable, or has no A/AAAA.
+// UDP first with a path-sized EDNS0 OPT; TCP only if the UDP reply is truncated
+// or unusable. A complete UDP answer is final, NXDOMAIN and empty answers
+// included: TCP would return the same answer, and TCP/53 can be dropped on the
+// path which would stall the lookup.
 func (r *TUNResolver) queryDNS(ctx context.Context, dnsServer, name string, qtype uint16) (net.IP, error) {
 	msg := new(dns.Msg)
 	msg.SetQuestion(name, qtype)
@@ -193,12 +195,16 @@ func (r *TUNResolver) queryDNS(ctx context.Context, dnsServer, name string, qtyp
 	msg.SetEdns0(r.ednsSize(), false)
 
 	resp, err := r.roundTrip(ctx, "udp", dnsServer, msg)
-	ip := firstIP(resp, qtype)
-	if err == nil && ip != nil && (resp == nil || !resp.Truncated) {
-		return ip, nil
-	}
 	if err != nil && resp == nil {
 		return nil, err
+	}
+	ip := firstIP(resp, qtype)
+	if err == nil && !resp.Truncated {
+		if ip != nil {
+			return ip, nil
+		}
+		return nil, fmt.Errorf("no %s records for %s (%s)",
+			dns.TypeToString[qtype], name, dns.RcodeToString[resp.Rcode])
 	}
 
 	tcpResp, tcpErr := r.roundTrip(ctx, "tcp", dnsServer, msg)
@@ -218,16 +224,21 @@ func (r *TUNResolver) queryDNS(ctx context.Context, dnsServer, name string, qtyp
 }
 
 func (r *TUNResolver) roundTrip(ctx context.Context, network, server string, msg *dns.Msg) (*dns.Msg, error) {
-	conn, err := r.dial(ctx, network, server)
+	deadline := time.Now().Add(dnsQueryTimeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	// The dial shares the query deadline so a TCP connect whose SYN is dropped
+	// would otherwise wait on the stack's own retries for minutes.
+	dialCtx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+
+	conn, err := r.dial(dialCtx, network, server)
 	if err != nil {
 		return nil, err
 	}
 	defer conn.Close()
 
-	deadline := time.Now().Add(dnsQueryTimeout)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
-	}
 	_ = conn.SetDeadline(deadline)
 
 	c := &dns.Conn{Conn: conn}
