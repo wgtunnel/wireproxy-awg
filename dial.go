@@ -4,7 +4,11 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/netip"
 )
+
+// Untranslated FakeDNS destinations and loopback stay on the existing tunnel path.
+var syntheticIPv4 = netip.MustParsePrefix("198.18.0.0/15")
 
 // tunDialer dials through the tunnel netstack, resolving hostnames with the
 // TUN resolver (search domains, IPv4 preference). SOCKS5, SOCKS4/4a and the
@@ -19,7 +23,7 @@ func newTUNDialer(vt *VirtualTun) *tunDialer {
 	return &tunDialer{vt: vt, resolver: &TUNResolver{vt: vt}}
 }
 
-// DialContext resolves the hostname (if any) and dials through the tunnel.
+// DialContext resolves the hostname before selecting a connection path.
 func (d *tunDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
@@ -34,7 +38,16 @@ func (d *tunDialer) DialContext(ctx context.Context, network, address string) (n
 		if resolveErr != nil {
 			return nil, resolveErr
 		}
-		address = net.JoinHostPort(resolvedIP.String(), port)
+		host = resolvedIP.String()
+		address = net.JoinHostPort(host, port)
+	}
+
+	if d.vt.DialDirectTCP4 != nil && (network == "tcp" || network == "tcp4") {
+		if ip, err := netip.ParseAddr(host); err == nil && ip.Is4() && !ip.IsLoopback() && !ip.IsUnspecified() && !syntheticIPv4.Contains(ip) {
+			if conn, handled, err := d.vt.DialDirectTCP4(ctx, ip, port); handled || err != nil {
+				return conn, err
+			}
+		}
 	}
 
 	conn, err := d.vt.Tnet.DialContext(ctx, network, address)

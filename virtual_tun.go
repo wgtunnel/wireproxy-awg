@@ -1,7 +1,9 @@
 package wireproxy
 
 import (
+	"context"
 	"net"
+	"net/netip"
 	"sync"
 
 	"github.com/amnezia-vpn/amneziawg-go/v3/device"
@@ -15,6 +17,9 @@ type VirtualTun struct {
 	Logger *device.Logger
 	Uapi   net.Listener
 	Conf   *DeviceConfig
+	// DialDirectTCP4 handles an eligible numeric IPv4 destination. A false
+	// handled result leaves the connection on the tunnel.
+	DialDirectTCP4 func(context.Context, netip.Addr, string) (conn net.Conn, handled bool, err error)
 	// PingRecord stores the last time an IP was pinged
 	PingRecord     map[string]uint64
 	PingRecordLock *sync.Mutex
